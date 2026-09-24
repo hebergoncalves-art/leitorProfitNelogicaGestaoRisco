@@ -39,8 +39,8 @@ class ProfitAlertApp:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("Leitor Profit · alerta de perda")
-        self.root.geometry("720x520")
-        self.root.minsize(650, 450)
+        self.root.geometry("760x570")
+        self.root.minsize(690, 510)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_or_exit)
         self.events: queue.Queue[MonitorEvent] = queue.Queue()
         self.monitor: Monitor | None = None
@@ -51,6 +51,8 @@ class ProfitAlertApp:
         self.account_var = tk.StringVar()
         self.mode_var = tk.StringVar(value="Automático: acessibilidade, depois OCR")
         self.scan_height_var = tk.StringVar(value="220")
+        self.auto_action_var = tk.BooleanVar(value=False)
+        self.action_var = tk.StringVar(value="Pausar + Zerar: não acionado")
         self.status_var = tk.StringVar(value="Parado")
         self.value_var = tk.StringVar(value="Ainda sem leitura")
         self._build_ui()
@@ -62,7 +64,7 @@ class ProfitAlertApp:
         frame = ttk.Frame(self.root, padding=18)
         frame.pack(fill="both", expand=True)
         ttk.Label(frame, text="Alerta de perda do Profit", font=("Segoe UI", 17, "bold")).pack(anchor="w")
-        ttk.Label(frame, text="Somente leitura e aviso. O aplicativo não envia ordens nem clica no Profit.").pack(anchor="w", pady=(2, 14))
+        ttk.Label(frame, text="Som e alerta sempre ativos. O acionamento global do Profit é opcional.").pack(anchor="w", pady=(2, 14))
 
         row = ttk.Frame(frame)
         row.pack(fill="x", pady=4)
@@ -97,6 +99,13 @@ class ProfitAlertApp:
         ttk.Entry(row, textvariable=self.scan_height_var, width=8).pack(side="left")
         ttk.Label(row, text="pixels do topo; ajuste se o campo não for encontrado.").pack(side="left", padx=10)
 
+        self.auto_checkbox = ttk.Checkbutton(
+            frame, text="Acionar Pausar + Zerar posições automaticamente",
+            variable=self.auto_action_var)
+        self.auto_checkbox.pack(anchor="w", pady=(10, 0))
+        ttk.Label(frame, text="Ação em TODAS AS CONTAS; exige cruzamento do limite e duas capturas."
+                  ).pack(anchor="w", pady=(0, 4))
+
         buttons = ttk.Frame(frame)
         buttons.pack(fill="x", pady=(12, 10))
         self.start_button = ttk.Button(buttons, text="Iniciar monitoramento", command=self.start_monitor)
@@ -109,6 +118,7 @@ class ProfitAlertApp:
         status.pack(fill="x", pady=(2, 10))
         ttk.Label(status, textvariable=self.status_var, wraplength=640).pack(anchor="w")
         ttk.Label(status, textvariable=self.value_var, font=("Segoe UI", 15, "bold")).pack(anchor="w", pady=(5, 0))
+        ttk.Label(status, textvariable=self.action_var, wraplength=680).pack(anchor="w", pady=(4, 0))
 
         ttk.Label(frame, text="Eventos desta sessão").pack(anchor="w")
         self.log = scrolledtext.ScrolledText(frame, height=8, state="disabled", font=("Consolas", 9))
@@ -157,12 +167,19 @@ class ProfitAlertApp:
             "Somente acessibilidade": "uia",
             "Somente OCR da janela": "ocr",
         }[self.mode_var.get()]
-        self.monitor = Monitor(MonitorConfig(target.hwnd, threshold, mode, account, scan_height), self.events)
+        automatic = self.auto_action_var.get()
+        self.monitor = Monitor(MonitorConfig(target.hwnd, threshold, mode, account,
+                                            scan_height, automatic, target.pid), self.events)
         self.monitor.start()
+        self.action_var.set("Pausar + Zerar: aguardando cruzamento" if automatic else
+                            "Pausar + Zerar: não acionado")
         self.status_var.set("Iniciando...")
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
-        self._log(f"Iniciado: {target.title} | limite {format_brl(threshold)} | método {mode}")
+        self.auto_checkbox.configure(state="disabled")
+        self._log(f"Iniciado: {target.title} | limite {format_brl(threshold)} | método "
+                  f"{'OCR para ação automática' if automatic else mode} | "
+                  f"ação global {'ligada' if automatic else 'desligada'}")
 
     def stop_monitor(self) -> None:
         if self.monitor is not None:
@@ -199,6 +216,14 @@ class ProfitAlertApp:
                     self.status_var.set(event.message)
                     self._log(event.message)
                     self._show_notice("LIMITE DE PERDA ATINGIDO", event.message + "\nConfira e aja no Profit.", True)
+                elif event.kind == "action":
+                    self.action_var.set("Pausar + Zerar: " + event.message)
+                    self._log(event.message)
+                elif event.kind == "action_failed":
+                    self.action_var.set("Pausar + Zerar: falha; verifique o Profit")
+                    self._log(event.message)
+                    self._show_notice("FALHA NO ZERAMENTO AUTOMÁTICO", event.message +
+                                      "\nConfira o Profit manualmente.", False)
                 elif event.kind == "warning":
                     self.status_var.set("ATENÇÃO: " + event.message)
                     self._log("ATENÇÃO: " + event.message)
@@ -206,6 +231,7 @@ class ProfitAlertApp:
                 elif event.kind == "stopped":
                     self.start_button.configure(state="normal")
                     self.stop_button.configure(state="disabled")
+                    self.auto_checkbox.configure(state="normal")
                     self._log(event.message)
         except queue.Empty:
             pass

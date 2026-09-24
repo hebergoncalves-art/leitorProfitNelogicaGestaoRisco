@@ -7,6 +7,8 @@ import ntpath
 from ctypes import wintypes
 from dataclasses import dataclass
 
+import comtypes
+
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 _enum_callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -113,3 +115,20 @@ def target_state(hwnd: int) -> str | None:
     if not user32.IsWindowVisible(hwnd):
         return "A janela do Profit não está visível para o Windows."
     return None
+
+
+def on_current_virtual_desktop(hwnd: int) -> bool:
+    """Retorna False se o Profit está em outra área virtual; falha fechada."""
+    class VirtualDesktopManager(comtypes.IUnknown):
+        _iid_ = comtypes.GUID("{A5CD92FF-29BE-454C-8D04-D82879FB3F1B}")
+        _methods_ = [comtypes.COMMETHOD(
+            [], comtypes.HRESULT, "IsWindowOnCurrentVirtualDesktop",
+            (["in"], wintypes.HWND, "hwnd"),
+            (["out"], ctypes.POINTER(wintypes.BOOL), "on_current"),
+        )]
+
+    manager = comtypes.CoCreateInstance(
+        comtypes.GUID("{AA509086-5CA9-4C25-8F95-589D3C07B48A}"),
+        interface=VirtualDesktopManager,
+    )
+    return bool(manager.IsWindowOnCurrentVirtualDesktop(hwnd))

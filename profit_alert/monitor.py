@@ -11,7 +11,9 @@ from datetime import datetime
 import comtypes
 from rapidocr import RapidOCR
 
-from .core import AlertGate, format_brl
+from .action import ProfitAction
+from .action_store import ActionStore
+from .core import ActionGate, AlertGate, format_brl
 from .readers import Reading, UIAReader, WindowCapture, read_image
 from .windows import target_state
 
@@ -23,11 +25,13 @@ class MonitorConfig:
     mode: str = "auto"  # auto, uia, ocr
     expected_account: str = ""
     scan_height: int = 220
+    auto_action: bool = False
+    pid: int = 0
 
 
 @dataclass(frozen=True)
 class MonitorEvent:
-    kind: str  # status, reading, alert, warning, stopped
+    kind: str  # status, reading, alert, warning, action, action_failed, stopped
     message: str
     reading: Reading | None = None
 
@@ -40,6 +44,8 @@ class Monitor:
         self.thread: threading.Thread | None = None
         self.capture: WindowCapture | None = None
         self.gate = AlertGate(config.threshold_cents)
+        self.action_gate = ActionGate(config.threshold_cents)
+        self.initial_below_noted = False
         self.last_value: int | None = None
         self.last_report = 0.0
         self.warning_times: dict[str, float] = {}
@@ -65,7 +71,7 @@ class Monitor:
         expected = self.config.expected_account.strip()
         return not expected or expected in reading.header_text
 
-    def _observe(self, reading: Reading) -> None:
+    def _observe(self, reading: Reading, frame=None, engine=None) -> None:
         if not self._valid_account(reading):
             self._emit("warning", "A conta configurada não foi identificada no cabeçalho. Leitura ignorada.")
             return
@@ -76,6 +82,23 @@ class Monitor:
             self.last_report = now
         if self.gate.observe(reading.cents, reading.source, datetime.now()):
             self._emit("alert", f"Limite atingido: {format_brl(reading.cents)}", reading)
+        if self.config.auto_action and frame is not None and engine is not None:
+            if reading.cents <= self.config.threshold_cents and not self.action_gate.armed and not self.initial_below_noted:
+                self._emit("action", "Não acionado: resultado já abaixo do limite; aguardando cruzamento observado.")
+                self.initial_below_noted = True
+            elif reading.cents > self.config.threshold_cents and not self.action_gate.armed:
+                self._emit("action", "Pronto: aguardando cruzamento e duas capturas no limite.")
+            if self.action_gate.observe(reading.cents, reading.captured_at, now):
+                try:
+                    if not ActionStore().reserve(datetime.now().date(), self.config.pid):
+                        self._emit("action", "Não acionado: já houve uma tentativa automática hoje.")
+                        return
+                    self._emit("action", "Tentativa iniciada: Pausar + Zerar posições em todas as contas.")
+                    ProfitAction(self.config.hwnd, self.config.pid, self.capture, engine,
+                                 self.stop_event).execute(frame, reading.captured_at)
+                    self._emit("action", "Confirmação aceita; confira as posições no Profit.")
+                except Exception as exc:
+                    self._emit("action_failed", f"Falha no zeramento automático: {exc}")
 
     def _check_window(self) -> bool:
         problem = target_state(self.config.hwnd)
@@ -117,7 +140,8 @@ class Monitor:
     def _run_ocr(self) -> None:
         self._emit("status", "Iniciando captura da janela do Profit...")
         engine = RapidOCR()
-        capture = WindowCapture(self.config.hwnd, self.config.scan_height)
+        capture = WindowCapture(self.config.hwnd, self.config.scan_height,
+                                full_frame=self.config.auto_action)
         self.capture = capture
         capture.start()
         self._emit("status", "Captura da janela ativa. O Profit pode ficar atrás de outras janelas.")
@@ -145,14 +169,14 @@ class Monitor:
                 self._emit("status", "Leitura OCR restaurada.")
             unreadable_since = None
             unreadable_warning = False
-            self._observe(replace(reading, captured_at=captured_at))
+            self._observe(replace(reading, captured_at=captured_at), image, engine)
 
     def _run(self) -> None:
         comtypes.CoInitialize()
         try:
             if not self._check_window():
                 return
-            if self.config.mode in ("auto", "uia"):
+            if self.config.mode in ("auto", "uia") and not self.config.auto_action:
                 finished = self._run_uia()
                 if finished:
                     return

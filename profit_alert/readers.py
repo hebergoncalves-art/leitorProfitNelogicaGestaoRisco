@@ -109,10 +109,11 @@ class UIAReader:
 class WindowCapture:
     """Mantém apenas o último quadro da faixa superior, sem capturar a tela ativa."""
 
-    def __init__(self, hwnd: int, scan_height: int = 220) -> None:
+    def __init__(self, hwnd: int, scan_height: int = 220, full_frame: bool = False) -> None:
         self.frames: queue.Queue[tuple[np.ndarray, float]] = queue.Queue(maxsize=1)
         self.closed = False
         self.scan_height = scan_height
+        self.full_frame = full_frame
         self.capture = WindowsCapture(
             cursor_capture=False,
             window_hwnd=hwnd,
@@ -122,7 +123,8 @@ class WindowCapture:
         @self.capture.event
         def on_frame_arrived(frame: Frame, _control: InternalCaptureControl) -> None:
             # frame_buffer pertence ao quadro nativo: copiar antes do retorno.
-            array = frame.frame_buffer[: self.scan_height, :1000].copy()
+            array = (frame.frame_buffer.copy() if self.full_frame
+                     else frame.frame_buffer[: self.scan_height, :1000].copy())
             while self.frames.full():
                 try:
                     self.frames.get_nowait()
