@@ -1,0 +1,9 @@
+uiautomation==2.0.29
+windows-capture==2.0.1
+rapidocr==3.9.2
+onnxruntime==1.30.0
+opencv-python==5.0.0.93
+numpy==2.5.3
+pillow==12.3.0
+pystray==0.19.5
+
