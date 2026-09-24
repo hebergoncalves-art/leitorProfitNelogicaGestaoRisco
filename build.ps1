@@ -6,7 +6,7 @@ if (-not (Test-Path -LiteralPath $python)) {
 }
 $basePython = & $python -c 'import sys; print(sys.base_prefix)'
 & $python -m PyInstaller --noconfirm --clean --onedir --windowed `
-    --name LeitorProfitV2 `
+    --name LeitorProfitV3 `
     --paths (Join-Path $basePython 'Lib') `
     --paths (Join-Path $basePython 'DLLs') `
     --hidden-import tkinter `
@@ -22,4 +22,4 @@ $basePython = & $python -c 'import sys; print(sys.base_prefix)'
     --hidden-import pystray._win32 `
     (Join-Path $projectDir 'run_app.py')
 if ($LASTEXITCODE -ne 0) { throw 'Falha ao gerar executável.' }
-Write-Host "Executável: $(Join-Path $projectDir 'dist\LeitorProfitV2\LeitorProfitV2.exe')"
+Write-Host "Executável: $(Join-Path $projectDir 'dist\LeitorProfitV3\LeitorProfitV3.exe')"

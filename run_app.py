@@ -1,6 +1,7 @@
 """Entrada simples para empacotamento como executável Windows."""
 
 import os
+import ctypes
 import queue
 import sys
 import tempfile
@@ -43,12 +44,20 @@ if __name__ == "__main__":
                 raise RuntimeError("O executável não recebeu leitura do Profit")
         else:
             from profit_alert.app import ProfitAlertApp
-
-            app = ProfitAlertApp()
             if "--smoke" in sys.argv:
+                app = ProfitAlertApp()
                 app.root.withdraw()
                 app.root.after(2000, app.exit)
-            app.run()
+                app.run()
+            else:
+                from profit_alert.single_instance import SingleInstance
+
+                with SingleInstance() as first:
+                    if first:
+                        ProfitAlertApp().run()
+                    else:
+                        ctypes.WinDLL("user32").MessageBoxW(
+                            0, "O Leitor Profit já está aberto.", "Leitor Profit", 0x40)
     except Exception:
         path = Path(tempfile.gettempdir()) / "LeitorProfit-error.log"
         path.write_text(traceback.format_exc(), encoding="utf-8")

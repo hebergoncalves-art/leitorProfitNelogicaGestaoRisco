@@ -25,10 +25,14 @@ def main() -> None:
         print(f"Res. Dia: {format_brl(reading.cents)}")
         return
     from .app import ProfitAlertApp
+    from .single_instance import SingleInstance
 
-    ProfitAlertApp().run()
+    with SingleInstance() as first:
+        if first:
+            ProfitAlertApp().run()
+        else:
+            print("O Leitor Profit já está aberto.")
 
 
 if __name__ == "__main__":
     main()
-

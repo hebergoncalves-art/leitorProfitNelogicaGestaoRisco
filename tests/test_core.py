@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta
 
-from profit_alert.core import AlertGate, format_brl, parse_result, parse_threshold
+from profit_alert.core import ActionGate, AlertGate, format_brl, parse_result, parse_threshold
 
 
 class MoneyParsingTests(unittest.TestCase):
@@ -40,6 +40,24 @@ class AlertGateTests(unittest.TestCase):
         self.assertTrue(gate.observe(-15000, "OCR", now))
 
 
+class ActionGateTests(unittest.TestCase):
+    def test_requires_above_then_two_distinct_fresh_captures(self):
+        gate = ActionGate(-15000)
+        self.assertFalse(gate.observe(-15100, 100, 100))  # iniciou abaixo
+        self.assertFalse(gate.observe(-14900, 101, 101))
+        self.assertFalse(gate.observe(-15000, 102, 102))
+        self.assertFalse(gate.observe(-15200, 102, 103))  # mesmo quadro
+        self.assertTrue(gate.observe(-15200, 104, 104))
+        self.assertFalse(gate.observe(-16000, 105, 105))
+
+    def test_invalid_or_stale_reading_resets_confirmation(self):
+        gate = ActionGate(-15000)
+        gate.observe(-14900, 100, 100)
+        gate.observe(-15000, 101, 101)
+        self.assertFalse(gate.observe(-15000, 102, 109))  # quadro antigo
+        self.assertFalse(gate.observe(-15000, 110, 110))
+        self.assertTrue(gate.observe(-15000, 111, 111))
+
+
 if __name__ == "__main__":
     unittest.main()
-

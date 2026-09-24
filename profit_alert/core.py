@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 
 _NUMBER = r"(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2}"
@@ -82,3 +82,45 @@ class AlertGate:
     def reset(self) -> None:
         self.triggered_day = None
         self.consecutive = 0
+
+
+@dataclass
+class ActionGate:
+    """Exige cruzamento observado e duas leituras recentes e distintas."""
+
+    threshold_cents: int
+    armed: bool = False
+    first_below_at: float | None = None
+    last_frame_at: float | None = None
+    attempted: bool = False
+    observed_day: date | None = None
+
+    def observe(self, cents: int | None, captured_at: float, now: float) -> bool:
+        day = date.fromtimestamp(now)
+        if self.observed_day != day:
+            self.observed_day = day
+            self.armed = False
+            self.first_below_at = None
+            self.last_frame_at = None
+            self.attempted = False
+        if self.attempted:
+            return False
+        if cents is None or captured_at > now + 1 or now - captured_at > 5:
+            self.first_below_at = None
+            self.last_frame_at = None
+            return False
+        if cents > self.threshold_cents:
+            self.armed = True
+            self.first_below_at = None
+            self.last_frame_at = None
+            return False
+        if not self.armed:
+            return False
+        if self.first_below_at is None or now - self.first_below_at > 10:
+            self.first_below_at = now
+            self.last_frame_at = captured_at
+            return False
+        if captured_at <= (self.last_frame_at or 0):
+            return False
+        self.attempted = True
+        return True
