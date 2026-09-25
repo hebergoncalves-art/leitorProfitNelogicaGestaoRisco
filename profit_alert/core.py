@@ -63,6 +63,26 @@ def parse_gain_threshold(text: str) -> int | None:
     return value
 
 
+def parse_drawdown_threshold(text: str) -> int | None:
+    """Retorna None para campo vazio; o recuo configurado deve ser positivo."""
+    if not text.strip():
+        return None
+    match = _THRESHOLD.fullmatch(text)
+    if match is None or match.group("before") or match.group("after"):
+        raise ValueError("Digite um limite de drawdown positivo, por exemplo 450,00.")
+    number = match.group("number")
+    if "," not in number:
+        number += ",00"
+    value = _to_cents(number, False)
+    if value <= 0:
+        raise ValueError("O limite de drawdown deve ser maior que zero.")
+    return value
+
+
+def default_drawdown_cents(loss_threshold_cents: int) -> int:
+    return abs(loss_threshold_cents) * 3
+
+
 def format_brl(cents: int) -> str:
     sign = "-" if cents < 0 else ""
     absolute = abs(cents)
@@ -117,6 +137,7 @@ class ActionGate:
     last_frame_at: float | None = None
     attempted: bool = False
     observed_day: date | None = None
+    suppressed_until_outside: bool = False
 
     def observe(self, cents: int | None, captured_at: float, now: float) -> bool:
         day = date.fromtimestamp(now)
@@ -126,6 +147,7 @@ class ActionGate:
             self.first_at_limit = None
             self.last_frame_at = None
             self.attempted = False
+            self.suppressed_until_outside = False
         if self.attempted:
             return False
         if cents is None or captured_at > now + 1 or now - captured_at > 5:
@@ -134,6 +156,11 @@ class ActionGate:
             return False
         outside_limit = (cents < self.threshold_cents if self.direction == "gain"
                          else cents > self.threshold_cents)
+        if self.suppressed_until_outside:
+            if outside_limit:
+                self.suppressed_until_outside = False
+                self.armed = True
+            return False
         if outside_limit:
             self.armed = True
             self.first_at_limit = None
@@ -149,3 +176,38 @@ class ActionGate:
             return False
         self.attempted = True
         return True
+
+    def defer_until_recross(self) -> None:
+        """Adia um gatilho simultâneo até sair do limite e cruzá-lo novamente."""
+        self.suppressed_until_outside = True
+        self.armed = False
+        self.first_at_limit = None
+        self.last_frame_at = None
+        self.attempted = False
+
+
+@dataclass
+class DrawdownTracker:
+    limit_cents: int
+    peak_cents: int | None = None
+    observed_day: date | None = None
+    alerted: bool = False
+
+    def __post_init__(self) -> None:
+        if self.limit_cents <= 0:
+            raise ValueError("O limite de drawdown deve ser maior que zero.")
+
+    def observe(self, cents: int, day: date) -> tuple[int | None, int | None, bool]:
+        if self.observed_day != day:
+            self.observed_day = day
+            self.peak_cents = None
+            self.alerted = False
+        if cents > 0 and (self.peak_cents is None or cents > self.peak_cents):
+            self.peak_cents = cents
+        if self.peak_cents is None:
+            return None, None, False
+        drawdown_cents = self.peak_cents - cents
+        newly_hit = drawdown_cents >= self.limit_cents and not self.alerted
+        if newly_hit:
+            self.alerted = True
+        return self.peak_cents, drawdown_cents, newly_hit
