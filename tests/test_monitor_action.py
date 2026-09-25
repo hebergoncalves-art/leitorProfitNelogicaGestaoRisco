@@ -10,7 +10,8 @@ from profit_alert.readers import Reading
 class MonitorActionTests(unittest.TestCase):
     def test_alert_remains_independent_of_two_capture_action(self):
         events = queue.Queue()
-        monitor = Monitor(MonitorConfig(1, -15000, auto_action=True, pid=10), events)
+        monitor = Monitor(MonitorConfig(1, -15000, auto_action=True, pid=10,
+                                        gain_threshold_cents=15000), events)
         monitor.capture = object()
         frame = object()
         engine = object()

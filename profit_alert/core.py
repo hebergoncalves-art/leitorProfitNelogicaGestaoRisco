@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Literal
 
 
 _NUMBER = r"(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2}"
@@ -46,6 +47,22 @@ def parse_threshold(text: str) -> int:
     return value
 
 
+def parse_gain_threshold(text: str) -> int | None:
+    """Retorna None para campo vazio; ganho configurado deve ser positivo."""
+    if not text.strip():
+        return None
+    match = _THRESHOLD.fullmatch(text)
+    if match is None or match.group("before") or match.group("after"):
+        raise ValueError("Digite um limite de ganho positivo, por exemplo 150,00.")
+    number = match.group("number")
+    if "," not in number:
+        number += ",00"
+    value = _to_cents(number, False)
+    if value <= 0:
+        raise ValueError("O limite de ganho deve ser maior que zero.")
+    return value
+
+
 def format_brl(cents: int) -> str:
     sign = "-" if cents < 0 else ""
     absolute = abs(cents)
@@ -61,13 +78,18 @@ class AlertGate:
     ocr_confirmations: int = 1
     triggered_day: str | None = None
     consecutive: int = 0
+    direction: Literal["loss", "gain"] = "loss"
 
     def observe(self, cents: int | None, source: str, at: datetime) -> bool:
         day = at.date().isoformat()
         if self.triggered_day is not None and self.triggered_day != day:
             self.triggered_day = None
             self.consecutive = 0
-        if cents is None or cents > self.threshold_cents:
+        outside_limit = cents is None or (
+            cents < self.threshold_cents if self.direction == "gain"
+            else cents > self.threshold_cents
+        )
+        if outside_limit:
             self.consecutive = 0
             return False
         if self.triggered_day == day:

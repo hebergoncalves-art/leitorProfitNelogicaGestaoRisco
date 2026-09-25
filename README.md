@@ -1,6 +1,6 @@
 # Leitor Profit
 
-Aplicativo Windows que lê o campo monetário `Res. Dia` da janela de Automações do Profit Pro. Quando o valor é igual ou inferior ao limite configurado, toca um som e abre um aviso. A opção de **Pausar + Zerar posições** é desligada por padrão; quando ligada, aciona e confirma o comando global do Profit sem usar a DLL da Nelogica.
+Aplicativo Windows que lê o campo monetário `Res. Dia` da janela de Automações do Profit Pro. A perda no limite ou abaixo e o ganho no limite ou acima emitem sons diferentes e abrem avisos. O limite de ganho é opcional e começa vazio. A opção de **Pausar + Zerar posições** é desligada por padrão; quando ligada, aciona e confirma o comando global do Profit somente pela perda, sem usar a DLL da Nelogica.
 
 ## Iniciar
 
@@ -9,10 +9,12 @@ Neste computador, dê dois cliques em [Iniciar-LeitorProfit.cmd](Iniciar-LeitorP
 Na janela do aplicativo:
 
 1. Deixe a tela **Automações** aberta no Profit, sem minimizar a janela.
-2. Escolha a janela `ProfitPro` na lista e mantenha o limite `-150,00` ou altere-o.
+2. Escolha a janela `ProfitPro` na lista e mantenha o limite de perda `-150,00` ou altere-o. Se quiser alerta de ganho, preencha **Limite de ganho** com valor maior que zero, por exemplo `150,00`; vazio desliga esse alerta.
 3. Se quiser impedir leitura de outra conta, digite apenas os dígitos do número da conta no campo opcional.
 4. Clique em **Iniciar monitoramento**. Depois, pode deixar Chrome ou VS Code por cima do Profit na mesma área de trabalho.
-5. Clique em **Testar som** para conferir o volume. Fechar a janela principal a envia para a bandeja do Windows; use o ícone vermelho `P` para mostrá-la ou sair.
+5. Clique em **Testar som perda** e **Testar som ganho** para conferir os dois sons. Fechar a janela principal a envia para a bandeja do Windows; use o ícone vermelho `P` para mostrá-la ou sair.
+
+Cada alerta é emitido uma vez por dia durante a sessão de monitoramento, mesmo que o primeiro valor lido já esteja no respectivo limite. Ao reiniciar o aplicativo, a contagem de alertas recomeça. O ganho mostra um popup verde e uma sequência ascendente de tons; ele nunca aciona **Pausar + Zerar posições**.
 
 Para permitir o acionamento automático, marque **Acionar Pausar + Zerar posições automaticamente** antes de iniciar. O Profit informa que essa ação cancela ordens e encerra posições de automação **em todas as contas**. A conta opcional acima filtra a leitura, mas não restringe o comando. Com a opção ligada, a leitura usa OCR: o acionamento exige um valor anterior acima do limite e duas capturas recentes e distintas no limite ou abaixo. Se o aplicativo iniciar já abaixo, ele avisa normalmente, mas não aciona o Profit. Uma tentativa é registrada por dia em `%LOCALAPPDATA%\LeitorProfit\action-state.json`; uma falha ou dúvida não provoca repetição automática. O aplicativo não traz o Profit à frente.
 
