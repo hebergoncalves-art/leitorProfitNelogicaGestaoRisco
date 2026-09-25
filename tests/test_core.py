@@ -84,6 +84,23 @@ class ActionGateTests(unittest.TestCase):
         self.assertFalse(gate.observe(-15000, 110, 110))
         self.assertTrue(gate.observe(-15000, 111, 111))
 
+    def test_gain_requires_crossing_and_two_distinct_captures(self):
+        gate = ActionGate(15000, direction="gain")
+        self.assertFalse(gate.observe(16000, 100, 100))  # iniciou acima
+        self.assertFalse(gate.observe(14900, 101, 101))
+        self.assertFalse(gate.observe(15000, 102, 102))  # igualdade conta
+        self.assertFalse(gate.observe(15100, 102, 103))  # mesmo quadro
+        self.assertTrue(gate.observe(15100, 104, 104))
+        self.assertFalse(gate.observe(16000, 105, 105))
+
+    def test_gain_stale_capture_resets_confirmation(self):
+        gate = ActionGate(15000, direction="gain")
+        gate.observe(14900, 100, 100)
+        gate.observe(15000, 101, 101)
+        self.assertFalse(gate.observe(15000, 102, 109))
+        self.assertFalse(gate.observe(15000, 110, 110))
+        self.assertTrue(gate.observe(15000, 111, 111))
+
 
 if __name__ == "__main__":
     unittest.main()

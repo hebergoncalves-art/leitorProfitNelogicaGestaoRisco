@@ -111,8 +111,9 @@ class ActionGate:
     """Exige cruzamento observado e duas leituras recentes e distintas."""
 
     threshold_cents: int
+    direction: Literal["loss", "gain"] = "loss"
     armed: bool = False
-    first_below_at: float | None = None
+    first_at_limit: float | None = None
     last_frame_at: float | None = None
     attempted: bool = False
     observed_day: date | None = None
@@ -122,24 +123,26 @@ class ActionGate:
         if self.observed_day != day:
             self.observed_day = day
             self.armed = False
-            self.first_below_at = None
+            self.first_at_limit = None
             self.last_frame_at = None
             self.attempted = False
         if self.attempted:
             return False
         if cents is None or captured_at > now + 1 or now - captured_at > 5:
-            self.first_below_at = None
+            self.first_at_limit = None
             self.last_frame_at = None
             return False
-        if cents > self.threshold_cents:
+        outside_limit = (cents < self.threshold_cents if self.direction == "gain"
+                         else cents > self.threshold_cents)
+        if outside_limit:
             self.armed = True
-            self.first_below_at = None
+            self.first_at_limit = None
             self.last_frame_at = None
             return False
         if not self.armed:
             return False
-        if self.first_below_at is None or now - self.first_below_at > 10:
-            self.first_below_at = now
+        if self.first_at_limit is None or now - self.first_at_limit > 10:
+            self.first_at_limit = now
             self.last_frame_at = captured_at
             return False
         if captured_at <= (self.last_frame_at or 0):

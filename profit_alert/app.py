@@ -45,8 +45,8 @@ class ProfitAlertApp:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("Leitor Profit · alertas de perda e ganho")
-        self.root.geometry("760x610")
-        self.root.minsize(690, 550)
+        self.root.geometry("760x650")
+        self.root.minsize(690, 590)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_or_exit)
         self.events: queue.Queue[MonitorEvent] = queue.Queue()
         self.monitor: Monitor | None = None
@@ -59,6 +59,7 @@ class ProfitAlertApp:
         self.mode_var = tk.StringVar(value="Automático: acessibilidade, depois OCR")
         self.scan_height_var = tk.StringVar(value="220")
         self.auto_action_var = tk.BooleanVar(value=False)
+        self.gain_auto_action_var = tk.BooleanVar(value=False)
         self.action_var = tk.StringVar(value="Pausar + Zerar: não acionado")
         self.status_var = tk.StringVar(value="Parado")
         self.value_var = tk.StringVar(value="Ainda sem leitura")
@@ -113,11 +114,15 @@ class ProfitAlertApp:
         ttk.Label(row, text="pixels do topo; ajuste se o campo não for encontrado.").pack(side="left", padx=10)
 
         self.auto_checkbox = ttk.Checkbutton(
-            frame, text="Acionar Pausar + Zerar posições automaticamente",
+            frame, text="Acionar Pausar + Zerar posições no limite de perda",
             variable=self.auto_action_var)
         self.auto_checkbox.pack(anchor="w", pady=(10, 0))
-        ttk.Label(frame, text="Ação somente no limite de perda, em TODAS AS CONTAS; exige cruzamento e duas capturas."
-                  ).pack(anchor="w", pady=(0, 4))
+        self.gain_auto_checkbox = ttk.Checkbutton(
+            frame, text="Acionar Pausar + Zerar posições no limite de ganho",
+            variable=self.gain_auto_action_var, command=self._validate_gain_action_selection)
+        self.gain_auto_checkbox.pack(anchor="w")
+        ttk.Label(frame, text="Em TODAS AS CONTAS; cruzamento e duas capturas por limite. "
+                  "Uma tentativa por dia.").pack(anchor="w", pady=(0, 4))
 
         buttons = ttk.Frame(frame)
         buttons.pack(fill="x", pady=(12, 10))
@@ -160,6 +165,16 @@ class ProfitAlertApp:
         else:
             self.window_var.set("")
 
+    def _validate_gain_action_selection(self) -> None:
+        if not self.gain_auto_action_var.get():
+            return
+        try:
+            if parse_gain_threshold(self.gain_threshold_var.get()) is None:
+                raise ValueError("Informe o limite de ganho antes de marcar o acionamento automático de ganho.")
+        except ValueError as exc:
+            self.gain_auto_action_var.set(False)
+            messagebox.showerror("Leitor Profit", str(exc))
+
     def start_monitor(self) -> None:
         target = self.targets.get(self.window_var.get())
         if target is None:
@@ -168,6 +183,8 @@ class ProfitAlertApp:
         try:
             threshold = parse_threshold(self.threshold_var.get())
             gain_threshold = parse_gain_threshold(self.gain_threshold_var.get())
+            if self.gain_auto_action_var.get() and gain_threshold is None:
+                raise ValueError("Informe o limite de ganho para usar o acionamento automático de ganho.")
             scan_height = int(self.scan_height_var.get())
             if not 140 <= scan_height <= 500:
                 raise ValueError("A altura de leitura deve ficar entre 140 e 500 pixels.")
@@ -182,21 +199,29 @@ class ProfitAlertApp:
             "Somente acessibilidade": "uia",
             "Somente OCR da janela": "ocr",
         }[self.mode_var.get()]
-        automatic = self.auto_action_var.get()
-        self.monitor = Monitor(MonitorConfig(target.hwnd, threshold, mode, account,
-                                            scan_height, automatic, target.pid,
-                                            gain_threshold), self.events)
+        loss_action = self.auto_action_var.get()
+        gain_action = self.gain_auto_action_var.get()
+        automatic = loss_action or gain_action
+        self.monitor = Monitor(MonitorConfig(
+            hwnd=target.hwnd, threshold_cents=threshold, mode=mode,
+            expected_account=account, scan_height=scan_height,
+            auto_action=loss_action, pid=target.pid,
+            gain_threshold_cents=gain_threshold, gain_auto_action=gain_action,
+        ), self.events)
         self.monitor.start()
-        self.action_var.set("Pausar + Zerar: aguardando cruzamento" if automatic else
-                            "Pausar + Zerar: não acionado")
+        action_limits = " e ".join(name for name, enabled in (
+            ("perda", loss_action), ("ganho", gain_action)) if enabled)
+        self.action_var.set(f"Pausar + Zerar: aguardando cruzamento ({action_limits})" if automatic
+                            else "Pausar + Zerar: não acionado")
         self.status_var.set("Iniciando...")
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
         self.auto_checkbox.configure(state="disabled")
+        self.gain_auto_checkbox.configure(state="disabled")
         gain_label = format_brl(gain_threshold) if gain_threshold is not None else "desligado"
         self._log(f"Iniciado: {target.title} | perda {format_brl(threshold)} | ganho {gain_label} | método "
                   f"{'OCR para ação automática' if automatic else mode} | "
-                  f"ação global {'ligada' if automatic else 'desligada'}")
+                  f"ação global {action_limits if automatic else 'desligada'}")
 
     def stop_monitor(self) -> None:
         if self.monitor is not None:
@@ -241,7 +266,7 @@ class ProfitAlertApp:
                     self.action_var.set("Pausar + Zerar: " + event.message)
                     self._log(event.message)
                 elif event.kind == "action_failed":
-                    self.action_var.set("Pausar + Zerar: falha; verifique o Profit")
+                    self.action_var.set("Pausar + Zerar: " + event.message)
                     self._log(event.message)
                     self._show_notice("FALHA NO ZERAMENTO AUTOMÁTICO", event.message +
                                       "\nConfira o Profit manualmente.", "warning")
@@ -253,6 +278,7 @@ class ProfitAlertApp:
                     self.start_button.configure(state="normal")
                     self.stop_button.configure(state="disabled")
                     self.auto_checkbox.configure(state="normal")
+                    self.gain_auto_checkbox.configure(state="normal")
                     self._log(event.message)
         except queue.Empty:
             pass

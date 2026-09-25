@@ -25,9 +25,10 @@ class MonitorConfig:
     mode: str = "auto"  # auto, uia, ocr
     expected_account: str = ""
     scan_height: int = 220
-    auto_action: bool = False
+    auto_action: bool = False  # acionamento no limite de perda
     pid: int = 0
     gain_threshold_cents: int | None = None
+    gain_auto_action: bool = False
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,8 @@ class MonitorEvent:
 
 class Monitor:
     def __init__(self, config: MonitorConfig, events: queue.Queue[MonitorEvent]) -> None:
+        if config.gain_auto_action and config.gain_threshold_cents is None:
+            raise ValueError("O acionamento automático de ganho exige um limite de ganho.")
         self.config = config
         self.events = events
         self.stop_event = threading.Event()
@@ -48,7 +51,10 @@ class Monitor:
         self.gain_gate = (AlertGate(config.gain_threshold_cents, direction="gain")
                           if config.gain_threshold_cents is not None else None)
         self.action_gate = ActionGate(config.threshold_cents)
-        self.initial_below_noted = False
+        self.gain_action_gate = (ActionGate(config.gain_threshold_cents, direction="gain")
+                                 if config.gain_auto_action else None)
+        self.initial_at_limit_noted: set[str] = set()
+        self.action_attempted_day = None
         self.last_value: int | None = None
         self.last_report = 0.0
         self.warning_times: dict[str, float] = {}
@@ -74,6 +80,35 @@ class Monitor:
         expected = self.config.expected_account.strip()
         return not expected or expected in reading.header_text
 
+    def _observe_action(self, reading: Reading, frame, engine, gate: ActionGate,
+                        limit_name: str) -> None:
+        today = datetime.now().date()
+        if self.action_attempted_day == today:
+            if gate.observe(reading.cents, reading.captured_at, time.time()):
+                self._emit("action", f"{limit_name}: não acionado; já houve uma tentativa automática hoje.")
+            return
+        at_limit = (reading.cents >= gate.threshold_cents if gate.direction == "gain"
+                    else reading.cents <= gate.threshold_cents)
+        if at_limit and not gate.armed and limit_name not in self.initial_at_limit_noted:
+            self._emit("action", f"{limit_name}: não acionado; resultado já no limite. "
+                       "Aguardando cruzamento observado.")
+            self.initial_at_limit_noted.add(limit_name)
+        elif not at_limit and not gate.armed:
+            self._emit("action", f"{limit_name}: pronto; aguardando cruzamento e duas capturas no limite.")
+        if not gate.observe(reading.cents, reading.captured_at, time.time()):
+            return
+        self.action_attempted_day = today
+        try:
+            if not ActionStore().reserve(today, self.config.pid):
+                self._emit("action", f"{limit_name}: não acionado; já houve uma tentativa automática hoje.")
+                return
+            self._emit("action", f"{limit_name}: tentativa iniciada; Pausar + Zerar posições em todas as contas.")
+            ProfitAction(self.config.hwnd, self.config.pid, self.capture, engine,
+                         self.stop_event).execute(frame, reading.captured_at)
+            self._emit("action", f"{limit_name}: confirmação aceita; confira as posições no Profit.")
+        except Exception as exc:
+            self._emit("action_failed", f"Falha no zeramento automático por {limit_name}: {exc}")
+
     def _observe(self, reading: Reading, frame=None, engine=None) -> None:
         if not self._valid_account(reading):
             self._emit("warning", "A conta configurada não foi identificada no cabeçalho. Leitura ignorada.")
@@ -90,23 +125,11 @@ class Monitor:
             reading.cents, reading.source, observed_at
         ):
             self._emit("gain_alert", f"Limite de ganho atingido: {format_brl(reading.cents)}", reading)
-        if self.config.auto_action and frame is not None and engine is not None:
-            if reading.cents <= self.config.threshold_cents and not self.action_gate.armed and not self.initial_below_noted:
-                self._emit("action", "Não acionado: resultado já abaixo do limite; aguardando cruzamento observado.")
-                self.initial_below_noted = True
-            elif reading.cents > self.config.threshold_cents and not self.action_gate.armed:
-                self._emit("action", "Pronto: aguardando cruzamento e duas capturas no limite.")
-            if self.action_gate.observe(reading.cents, reading.captured_at, now):
-                try:
-                    if not ActionStore().reserve(datetime.now().date(), self.config.pid):
-                        self._emit("action", "Não acionado: já houve uma tentativa automática hoje.")
-                        return
-                    self._emit("action", "Tentativa iniciada: Pausar + Zerar posições em todas as contas.")
-                    ProfitAction(self.config.hwnd, self.config.pid, self.capture, engine,
-                                 self.stop_event).execute(frame, reading.captured_at)
-                    self._emit("action", "Confirmação aceita; confira as posições no Profit.")
-                except Exception as exc:
-                    self._emit("action_failed", f"Falha no zeramento automático: {exc}")
+        if frame is not None and engine is not None:
+            if self.config.auto_action:
+                self._observe_action(reading, frame, engine, self.action_gate, "perda")
+            if self.gain_action_gate is not None:
+                self._observe_action(reading, frame, engine, self.gain_action_gate, "ganho")
 
     def _check_window(self) -> bool:
         problem = target_state(self.config.hwnd)
@@ -149,7 +172,7 @@ class Monitor:
         self._emit("status", "Iniciando captura da janela do Profit...")
         engine = RapidOCR()
         capture = WindowCapture(self.config.hwnd, self.config.scan_height,
-                                full_frame=self.config.auto_action)
+                                full_frame=self.config.auto_action or self.config.gain_auto_action)
         self.capture = capture
         capture.start()
         self._emit("status", "Captura da janela ativa. O Profit pode ficar atrás de outras janelas.")
@@ -184,7 +207,9 @@ class Monitor:
         try:
             if not self._check_window():
                 return
-            if self.config.mode in ("auto", "uia") and not self.config.auto_action:
+            if self.config.mode in ("auto", "uia") and not (
+                self.config.auto_action or self.config.gain_auto_action
+            ):
                 finished = self._run_uia()
                 if finished:
                     return
