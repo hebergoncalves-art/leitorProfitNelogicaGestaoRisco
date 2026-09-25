@@ -27,11 +27,12 @@ class MonitorConfig:
     scan_height: int = 220
     auto_action: bool = False
     pid: int = 0
+    gain_threshold_cents: int | None = None
 
 
 @dataclass(frozen=True)
 class MonitorEvent:
-    kind: str  # status, reading, alert, warning, action, action_failed, stopped
+    kind: str  # status, reading, alert, gain_alert, warning, action, action_failed, stopped
     message: str
     reading: Reading | None = None
 
@@ -44,6 +45,8 @@ class Monitor:
         self.thread: threading.Thread | None = None
         self.capture: WindowCapture | None = None
         self.gate = AlertGate(config.threshold_cents)
+        self.gain_gate = (AlertGate(config.gain_threshold_cents, direction="gain")
+                          if config.gain_threshold_cents is not None else None)
         self.action_gate = ActionGate(config.threshold_cents)
         self.initial_below_noted = False
         self.last_value: int | None = None
@@ -80,8 +83,13 @@ class Monitor:
             self._emit("reading", f"{format_brl(reading.cents)} · {reading.source}", reading)
             self.last_value = reading.cents
             self.last_report = now
-        if self.gate.observe(reading.cents, reading.source, datetime.now()):
+        observed_at = datetime.now()
+        if self.gate.observe(reading.cents, reading.source, observed_at):
             self._emit("alert", f"Limite atingido: {format_brl(reading.cents)}", reading)
+        if self.gain_gate is not None and self.gain_gate.observe(
+            reading.cents, reading.source, observed_at
+        ):
+            self._emit("gain_alert", f"Limite de ganho atingido: {format_brl(reading.cents)}", reading)
         if self.config.auto_action and frame is not None and engine is not None:
             if reading.cents <= self.config.threshold_cents and not self.action_gate.armed and not self.initial_below_noted:
                 self._emit("action", "Não acionado: resultado já abaixo do limite; aguardando cruzamento observado.")

@@ -11,18 +11,24 @@ from tkinter import messagebox, scrolledtext, ttk
 
 from PIL import Image, ImageDraw
 
-from .core import format_brl, parse_threshold
+from .core import format_brl, parse_gain_threshold, parse_threshold
 from .monitor import Monitor, MonitorConfig, MonitorEvent
 from .windows import WindowTarget, list_profit_windows
 
 
-def _beep(alert: bool = True) -> None:
+def _beep(kind: str = "loss") -> None:
     def play() -> None:
         try:
-            for _ in range(3 if alert else 2):
-                winsound.Beep(1250 if alert else 650, 350 if alert else 220)
+            if kind == "gain":
+                for frequency in (700, 900, 1100):
+                    winsound.Beep(frequency, 180)
+            else:
+                for _ in range(3 if kind == "loss" else 2):
+                    winsound.Beep(1250 if kind == "loss" else 650,
+                                  350 if kind == "loss" else 220)
         except RuntimeError:
-            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+            winsound.MessageBeep(winsound.MB_ICONASTERISK if kind == "gain"
+                                 else winsound.MB_ICONEXCLAMATION)
 
     threading.Thread(target=play, name="ProfitAlertSound", daemon=True).start()
 
@@ -38,9 +44,9 @@ def _tray_image() -> Image.Image:
 class ProfitAlertApp:
     def __init__(self) -> None:
         self.root = tk.Tk()
-        self.root.title("Leitor Profit · alerta de perda")
-        self.root.geometry("760x570")
-        self.root.minsize(690, 510)
+        self.root.title("Leitor Profit · alertas de perda e ganho")
+        self.root.geometry("760x610")
+        self.root.minsize(690, 550)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_or_exit)
         self.events: queue.Queue[MonitorEvent] = queue.Queue()
         self.monitor: Monitor | None = None
@@ -48,6 +54,7 @@ class ProfitAlertApp:
         self.targets: dict[str, WindowTarget] = {}
         self.window_var = tk.StringVar()
         self.threshold_var = tk.StringVar(value="-150,00")
+        self.gain_threshold_var = tk.StringVar(value="")
         self.account_var = tk.StringVar()
         self.mode_var = tk.StringVar(value="Automático: acessibilidade, depois OCR")
         self.scan_height_var = tk.StringVar(value="220")
@@ -63,8 +70,8 @@ class ProfitAlertApp:
     def _build_ui(self) -> None:
         frame = ttk.Frame(self.root, padding=18)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="Alerta de perda do Profit", font=("Segoe UI", 17, "bold")).pack(anchor="w")
-        ttk.Label(frame, text="Som e alerta sempre ativos. O acionamento global do Profit é opcional.").pack(anchor="w", pady=(2, 14))
+        ttk.Label(frame, text="Alertas de perda e ganho do Profit", font=("Segoe UI", 17, "bold")).pack(anchor="w")
+        ttk.Label(frame, text="Alertas para os limites configurados. O acionamento global do Profit é opcional.").pack(anchor="w", pady=(2, 14))
 
         row = ttk.Frame(frame)
         row.pack(fill="x", pady=4)
@@ -78,6 +85,12 @@ class ProfitAlertApp:
         ttk.Label(row, text="Limite de perda", width=19).pack(side="left")
         ttk.Entry(row, textvariable=self.threshold_var, width=15).pack(side="left")
         ttk.Label(row, text="Alerta em valor igual ou menor. Ex.: -150,00").pack(side="left", padx=10)
+
+        row = ttk.Frame(frame)
+        row.pack(fill="x", pady=4)
+        ttk.Label(row, text="Limite de ganho", width=19).pack(side="left")
+        ttk.Entry(row, textvariable=self.gain_threshold_var, width=15).pack(side="left")
+        ttk.Label(row, text="Opcional; alerta em valor igual ou maior. Ex.: 150,00").pack(side="left", padx=10)
 
         row = ttk.Frame(frame)
         row.pack(fill="x", pady=4)
@@ -103,7 +116,7 @@ class ProfitAlertApp:
             frame, text="Acionar Pausar + Zerar posições automaticamente",
             variable=self.auto_action_var)
         self.auto_checkbox.pack(anchor="w", pady=(10, 0))
-        ttk.Label(frame, text="Ação em TODAS AS CONTAS; exige cruzamento do limite e duas capturas."
+        ttk.Label(frame, text="Ação somente no limite de perda, em TODAS AS CONTAS; exige cruzamento e duas capturas."
                   ).pack(anchor="w", pady=(0, 4))
 
         buttons = ttk.Frame(frame)
@@ -112,7 +125,8 @@ class ProfitAlertApp:
         self.start_button.pack(side="left")
         self.stop_button = ttk.Button(buttons, text="Parar", command=self.stop_monitor, state="disabled")
         self.stop_button.pack(side="left", padx=8)
-        ttk.Button(buttons, text="Testar som", command=_beep).pack(side="left", padx=8)
+        ttk.Button(buttons, text="Testar som perda", command=_beep).pack(side="left", padx=8)
+        ttk.Button(buttons, text="Testar som ganho", command=lambda: _beep("gain")).pack(side="left")
 
         status = ttk.LabelFrame(frame, text="Estado", padding=10)
         status.pack(fill="x", pady=(2, 10))
@@ -153,6 +167,7 @@ class ProfitAlertApp:
             return
         try:
             threshold = parse_threshold(self.threshold_var.get())
+            gain_threshold = parse_gain_threshold(self.gain_threshold_var.get())
             scan_height = int(self.scan_height_var.get())
             if not 140 <= scan_height <= 500:
                 raise ValueError("A altura de leitura deve ficar entre 140 e 500 pixels.")
@@ -169,7 +184,8 @@ class ProfitAlertApp:
         }[self.mode_var.get()]
         automatic = self.auto_action_var.get()
         self.monitor = Monitor(MonitorConfig(target.hwnd, threshold, mode, account,
-                                            scan_height, automatic, target.pid), self.events)
+                                            scan_height, automatic, target.pid,
+                                            gain_threshold), self.events)
         self.monitor.start()
         self.action_var.set("Pausar + Zerar: aguardando cruzamento" if automatic else
                             "Pausar + Zerar: não acionado")
@@ -177,7 +193,8 @@ class ProfitAlertApp:
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
         self.auto_checkbox.configure(state="disabled")
-        self._log(f"Iniciado: {target.title} | limite {format_brl(threshold)} | método "
+        gain_label = format_brl(gain_threshold) if gain_threshold is not None else "desligado"
+        self._log(f"Iniciado: {target.title} | perda {format_brl(threshold)} | ganho {gain_label} | método "
                   f"{'OCR para ação automática' if automatic else mode} | "
                   f"ação global {'ligada' if automatic else 'desligada'}")
 
@@ -186,13 +203,13 @@ class ProfitAlertApp:
             self.monitor.stop()
         self.status_var.set("Parando...")
 
-    def _show_notice(self, title: str, message: str, alert: bool) -> None:
-        _beep(alert)
+    def _show_notice(self, title: str, message: str, kind: str) -> None:
+        _beep(kind)
         popup = tk.Toplevel(self.root)
         popup.title(title)
         popup.attributes("-topmost", True)
         popup.resizable(False, False)
-        popup.configure(bg="#822626" if alert else "#6c511c")
+        popup.configure(bg={"loss": "#822626", "gain": "#246b45"}.get(kind, "#6c511c"))
         label = tk.Label(popup, text=title, font=("Segoe UI", 16, "bold"), fg="white", bg=popup["bg"])
         label.pack(padx=22, pady=(20, 7))
         tk.Label(popup, text=message, font=("Segoe UI", 12), fg="white", bg=popup["bg"], wraplength=460).pack(padx=22)
@@ -215,7 +232,11 @@ class ProfitAlertApp:
                 elif event.kind == "alert":
                     self.status_var.set(event.message)
                     self._log(event.message)
-                    self._show_notice("LIMITE DE PERDA ATINGIDO", event.message + "\nConfira e aja no Profit.", True)
+                    self._show_notice("LIMITE DE PERDA ATINGIDO", event.message + "\nConfira e aja no Profit.", "loss")
+                elif event.kind == "gain_alert":
+                    self.status_var.set(event.message)
+                    self._log(event.message)
+                    self._show_notice("LIMITE DE GANHO ATINGIDO", event.message + "\nConfira o Profit.", "gain")
                 elif event.kind == "action":
                     self.action_var.set("Pausar + Zerar: " + event.message)
                     self._log(event.message)
@@ -223,11 +244,11 @@ class ProfitAlertApp:
                     self.action_var.set("Pausar + Zerar: falha; verifique o Profit")
                     self._log(event.message)
                     self._show_notice("FALHA NO ZERAMENTO AUTOMÁTICO", event.message +
-                                      "\nConfira o Profit manualmente.", False)
+                                      "\nConfira o Profit manualmente.", "warning")
                 elif event.kind == "warning":
                     self.status_var.set("ATENÇÃO: " + event.message)
                     self._log("ATENÇÃO: " + event.message)
-                    self._show_notice("LEITURA DO PROFIT INDISPONÍVEL", event.message, False)
+                    self._show_notice("LEITURA DO PROFIT INDISPONÍVEL", event.message, "warning")
                 elif event.kind == "stopped":
                     self.start_button.configure(state="normal")
                     self.stop_button.configure(state="disabled")

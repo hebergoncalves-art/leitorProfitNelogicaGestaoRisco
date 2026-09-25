@@ -1,7 +1,9 @@
 import unittest
 from datetime import datetime, timedelta
 
-from profit_alert.core import ActionGate, AlertGate, format_brl, parse_result, parse_threshold
+from profit_alert.core import (
+    ActionGate, AlertGate, format_brl, parse_gain_threshold, parse_result, parse_threshold,
+)
 
 
 class MoneyParsingTests(unittest.TestCase):
@@ -21,6 +23,15 @@ class MoneyParsingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_threshold("150,00")
 
+    def test_optional_gain_threshold_accepts_only_positive_values(self):
+        self.assertIsNone(parse_gain_threshold(""))
+        self.assertIsNone(parse_gain_threshold("  "))
+        self.assertEqual(parse_gain_threshold("150"), 15000)
+        self.assertEqual(parse_gain_threshold("R$ 1.234,56"), 123456)
+        for invalid in ("0", "0,00", "-0,00", "-150", "-R$ 150,00", "abc", "1.2,00"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                parse_gain_threshold(invalid)
+
 
 class AlertGateTests(unittest.TestCase):
     def test_crossing_jump_and_one_alert_per_day(self):
@@ -38,6 +49,21 @@ class AlertGateTests(unittest.TestCase):
         self.assertFalse(gate.observe(None, "OCR", now))
         self.assertFalse(gate.observe(-15000, "OCR", now))
         self.assertTrue(gate.observe(-15000, "OCR", now))
+
+    def test_gain_alert_at_or_above_limit_once_per_day(self):
+        gate = AlertGate(15000, direction="gain")
+        now = datetime(2026, 9, 24, 10, 0)
+        self.assertFalse(gate.observe(14999, "OCR", now))
+        self.assertTrue(gate.observe(15000, "OCR", now))
+        self.assertFalse(gate.observe(20000, "OCR", now + timedelta(seconds=1)))
+        self.assertFalse(gate.observe(14000, "OCR", now + timedelta(seconds=2)))
+        self.assertFalse(gate.observe(15000, "OCR", now + timedelta(seconds=3)))
+        self.assertTrue(gate.observe(20000, "OCR", now + timedelta(days=1)))
+
+    def test_gain_can_alert_on_first_reading_and_resets_with_new_gate(self):
+        now = datetime(2026, 9, 24, 10, 0)
+        self.assertTrue(AlertGate(15000, direction="gain").observe(16000, "OCR", now))
+        self.assertTrue(AlertGate(15000, direction="gain").observe(16000, "OCR", now))
 
 
 class ActionGateTests(unittest.TestCase):
