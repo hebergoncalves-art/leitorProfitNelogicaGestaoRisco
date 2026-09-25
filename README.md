@@ -1,10 +1,14 @@
 # Leitor Profit
 
+Última atualização: 2026-09-25.
+
 Aplicativo Windows que lê o campo monetário `Res. Dia` da janela de Automações do Profit Pro. A perda no limite ou abaixo, o ganho no limite ou acima e o recuo a partir do maior ganho observado (drawdown) podem emitir sons e avisos. O limite de ganho é opcional e começa vazio. O limite de drawdown começa em `450,00`, três vezes o valor absoluto da perda padrão de `-150,00`. As opções de **Pausar + Zerar posições** para perda, ganho e drawdown são independentes e começam desligadas; quando ligadas, acionam e confirmam o comando global do Profit, sem usar a DLL da Nelogica.
+
+Para conhecer os recursos e seus limites, veja a [visão geral](docs/project-overview.md). O fluxo interno e as dependências estão na [arquitetura](docs/architecture.md).
 
 ## Iniciar
 
-Neste computador, dê dois cliques em [Iniciar-LeitorProfit.cmd](Iniciar-LeitorProfit.cmd). O inicializador usa `dist/LeitorProfitV3` quando ele existe; caso contrário, usa o ambiente Python `.venv` preparado neste projeto. Se uma versão anterior estiver aberta, encerre-a pelo ícone na bandeja antes de iniciar a nova.
+Neste computador, dê dois cliques em [Iniciar-LeitorProfit.cmd](Iniciar-LeitorProfit.cmd). O inicializador tenta, nesta ordem, `dist/LeitorProfitV3`, `dist/LeitorProfitV2`, `dist/LeitorProfit` e o ambiente Python `.venv` preparado neste projeto. Se uma versão anterior estiver aberta, encerre-a pelo ícone na bandeja antes de iniciar a nova.
 
 Na janela do aplicativo:
 
@@ -46,6 +50,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
 Distribua a pasta **inteira** `dist/LeitorProfitV3`, não apenas o arquivo `.exe`.
+
+Para executar a suíte de testes existente no ambiente Python preparado:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -q
+```
 
 ## Diagnóstico
 
