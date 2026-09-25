@@ -2,18 +2,34 @@
 
 from __future__ import annotations
 
+import os
 import queue
+import sys
 import threading
 import tkinter as tk
 import winsound
 from datetime import datetime
+from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
 
 from PIL import Image, ImageDraw
 
-from .core import format_brl, parse_gain_threshold, parse_threshold
+from .core import (default_drawdown_cents, format_brl, parse_drawdown_threshold,
+                   parse_gain_threshold, parse_threshold)
 from .monitor import Monitor, MonitorConfig, MonitorEvent
 from .windows import WindowTarget, list_profit_windows
+
+
+def _configure_tcl_paths() -> None:
+    """Evita falhas do Tcl com caminhos Windows contendo espaços."""
+    if os.name != "nt":
+        return
+    base = (Path(sys._MEIPASS) / "tcl" if getattr(sys, "frozen", False)
+            else Path(sys.base_prefix) / "tcl")
+    for name, folder in (("TCL_LIBRARY", "tcl8.6"), ("TK_LIBRARY", "tk8.6")):
+        path = base / folder
+        if path.is_dir():
+            os.environ[name] = "//?/" + path.resolve().as_posix()
 
 
 def _beep(kind: str = "loss") -> None:
@@ -43,10 +59,11 @@ def _tray_image() -> Image.Image:
 
 class ProfitAlertApp:
     def __init__(self) -> None:
+        _configure_tcl_paths()
         self.root = tk.Tk()
-        self.root.title("Leitor Profit · alertas de perda e ganho")
-        self.root.geometry("760x650")
-        self.root.minsize(690, 590)
+        self.root.title("Leitor Profit · alertas de perda, ganho e drawdown")
+        self.root.geometry("820x730")
+        self.root.minsize(720, 650)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_or_exit)
         self.events: queue.Queue[MonitorEvent] = queue.Queue()
         self.monitor: Monitor | None = None
@@ -55,12 +72,22 @@ class ProfitAlertApp:
         self.window_var = tk.StringVar()
         self.threshold_var = tk.StringVar(value="-150,00")
         self.gain_threshold_var = tk.StringVar(value="")
+        default_drawdown = default_drawdown_cents(parse_threshold(self.threshold_var.get()))
+        self.drawdown_threshold_var = tk.StringVar(
+            value=format_brl(default_drawdown).removeprefix("R$ "))
+        self._drawdown_manually_edited = False
+        self._updating_drawdown = False
+        self.threshold_var.trace_add("write", self._update_drawdown_default)
+        self.drawdown_threshold_var.trace_add("write", self._mark_drawdown_edited)
         self.account_var = tk.StringVar()
         self.mode_var = tk.StringVar(value="Automático: acessibilidade, depois OCR")
         self.scan_height_var = tk.StringVar(value="220")
         self.auto_action_var = tk.BooleanVar(value=False)
         self.gain_auto_action_var = tk.BooleanVar(value=False)
+        self.drawdown_alert_var = tk.BooleanVar(value=False)
+        self.drawdown_auto_action_var = tk.BooleanVar(value=False)
         self.action_var = tk.StringVar(value="Pausar + Zerar: não acionado")
+        self.drawdown_state_var = tk.StringVar(value="Drawdown: desativado")
         self.status_var = tk.StringVar(value="Parado")
         self.value_var = tk.StringVar(value="Ainda sem leitura")
         self._build_ui()
@@ -71,7 +98,8 @@ class ProfitAlertApp:
     def _build_ui(self) -> None:
         frame = ttk.Frame(self.root, padding=18)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="Alertas de perda e ganho do Profit", font=("Segoe UI", 17, "bold")).pack(anchor="w")
+        ttk.Label(frame, text="Alertas de perda, ganho e drawdown do Profit",
+                  font=("Segoe UI", 17, "bold")).pack(anchor="w")
         ttk.Label(frame, text="Alertas para os limites configurados. O acionamento global do Profit é opcional.").pack(anchor="w", pady=(2, 14))
 
         row = ttk.Frame(frame)
@@ -92,6 +120,13 @@ class ProfitAlertApp:
         ttk.Label(row, text="Limite de ganho", width=19).pack(side="left")
         ttk.Entry(row, textvariable=self.gain_threshold_var, width=15).pack(side="left")
         ttk.Label(row, text="Opcional; alerta em valor igual ou maior. Ex.: 150,00").pack(side="left", padx=10)
+
+        row = ttk.Frame(frame)
+        row.pack(fill="x", pady=4)
+        ttk.Label(row, text="Limite de drawdown", width=19).pack(side="left")
+        ttk.Entry(row, textvariable=self.drawdown_threshold_var, width=15).pack(side="left")
+        ttk.Label(row, text="Recuo desde o pico positivo. Padrão: 3 × |limite de perda|."
+                  ).pack(side="left", padx=10)
 
         row = ttk.Frame(frame)
         row.pack(fill="x", pady=4)
@@ -121,8 +156,18 @@ class ProfitAlertApp:
             frame, text="Acionar Pausar + Zerar posições no limite de ganho",
             variable=self.gain_auto_action_var, command=self._validate_gain_action_selection)
         self.gain_auto_checkbox.pack(anchor="w")
-        ttk.Label(frame, text="Em TODAS AS CONTAS; cruzamento e duas capturas por limite. "
-                  "Uma tentativa por dia.").pack(anchor="w", pady=(0, 4))
+        self.drawdown_alert_checkbox = ttk.Checkbutton(
+            frame, text="Alerta de drawdown",
+            variable=self.drawdown_alert_var,
+            command=lambda: self._validate_drawdown_selection(self.drawdown_alert_var))
+        self.drawdown_alert_checkbox.pack(anchor="w", pady=(6, 0))
+        self.drawdown_auto_checkbox = ttk.Checkbutton(
+            frame, text="Acionar Pausar + Zerar posições no drawdown",
+            variable=self.drawdown_auto_action_var,
+            command=lambda: self._validate_drawdown_selection(self.drawdown_auto_action_var))
+        self.drawdown_auto_checkbox.pack(anchor="w")
+        ttk.Label(frame, text="Ação em TODAS AS CONTAS. Perda e ganho compartilham uma tentativa diária; "
+                  "drawdown tem uma própria.", wraplength=760).pack(anchor="w", pady=(0, 4))
 
         buttons = ttk.Frame(frame)
         buttons.pack(fill="x", pady=(12, 10))
@@ -137,6 +182,7 @@ class ProfitAlertApp:
         status.pack(fill="x", pady=(2, 10))
         ttk.Label(status, textvariable=self.status_var, wraplength=640).pack(anchor="w")
         ttk.Label(status, textvariable=self.value_var, font=("Segoe UI", 15, "bold")).pack(anchor="w", pady=(5, 0))
+        ttk.Label(status, textvariable=self.drawdown_state_var, wraplength=700).pack(anchor="w", pady=(4, 0))
         ttk.Label(status, textvariable=self.action_var, wraplength=680).pack(anchor="w", pady=(4, 0))
 
         ttk.Label(frame, text="Eventos desta sessão").pack(anchor="w")
@@ -165,6 +211,35 @@ class ProfitAlertApp:
         else:
             self.window_var.set("")
 
+    def _update_drawdown_default(self, *_args) -> None:
+        if self._drawdown_manually_edited:
+            return
+        try:
+            loss_cents = parse_threshold(self.threshold_var.get())
+        except ValueError:
+            return
+        default = format_brl(default_drawdown_cents(loss_cents)).removeprefix("R$ ")
+        if self.drawdown_threshold_var.get() != default:
+            self._updating_drawdown = True
+            try:
+                self.drawdown_threshold_var.set(default)
+            finally:
+                self._updating_drawdown = False
+
+    def _mark_drawdown_edited(self, *_args) -> None:
+        if not self._updating_drawdown:
+            self._drawdown_manually_edited = True
+
+    def _validate_drawdown_selection(self, selected_var: tk.BooleanVar) -> None:
+        if not selected_var.get():
+            return
+        try:
+            if parse_drawdown_threshold(self.drawdown_threshold_var.get()) is None:
+                raise ValueError("Informe o limite de drawdown antes de ativar esta opção.")
+        except ValueError as exc:
+            selected_var.set(False)
+            messagebox.showerror("Leitor Profit", str(exc))
+
     def _validate_gain_action_selection(self) -> None:
         if not self.gain_auto_action_var.get():
             return
@@ -183,8 +258,11 @@ class ProfitAlertApp:
         try:
             threshold = parse_threshold(self.threshold_var.get())
             gain_threshold = parse_gain_threshold(self.gain_threshold_var.get())
+            drawdown_threshold = parse_drawdown_threshold(self.drawdown_threshold_var.get())
             if self.gain_auto_action_var.get() and gain_threshold is None:
                 raise ValueError("Informe o limite de ganho para usar o acionamento automático de ganho.")
+            if (self.drawdown_alert_var.get() or self.drawdown_auto_action_var.get()) and drawdown_threshold is None:
+                raise ValueError("Informe o limite de drawdown para usar o alerta ou acionamento automático.")
             scan_height = int(self.scan_height_var.get())
             if not 140 <= scan_height <= 500:
                 raise ValueError("A altura de leitura deve ficar entre 140 e 500 pixels.")
@@ -201,25 +279,36 @@ class ProfitAlertApp:
         }[self.mode_var.get()]
         loss_action = self.auto_action_var.get()
         gain_action = self.gain_auto_action_var.get()
-        automatic = loss_action or gain_action
+        drawdown_alert = self.drawdown_alert_var.get()
+        drawdown_action = self.drawdown_auto_action_var.get()
+        automatic = loss_action or gain_action or drawdown_action
         self.monitor = Monitor(MonitorConfig(
             hwnd=target.hwnd, threshold_cents=threshold, mode=mode,
             expected_account=account, scan_height=scan_height,
             auto_action=loss_action, pid=target.pid,
             gain_threshold_cents=gain_threshold, gain_auto_action=gain_action,
+            drawdown_threshold_cents=drawdown_threshold,
+            drawdown_alert=drawdown_alert, drawdown_auto_action=drawdown_action,
         ), self.events)
         self.monitor.start()
         action_limits = " e ".join(name for name, enabled in (
-            ("perda", loss_action), ("ganho", gain_action)) if enabled)
+            ("perda", loss_action), ("ganho", gain_action),
+            ("drawdown", drawdown_action)) if enabled)
         self.action_var.set(f"Pausar + Zerar: aguardando cruzamento ({action_limits})" if automatic
                             else "Pausar + Zerar: não acionado")
+        self.drawdown_state_var.set("Drawdown: aguardando pico positivo" if (
+            drawdown_alert or drawdown_action) else "Drawdown: desativado")
         self.status_var.set("Iniciando...")
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
         self.auto_checkbox.configure(state="disabled")
         self.gain_auto_checkbox.configure(state="disabled")
+        self.drawdown_alert_checkbox.configure(state="disabled")
+        self.drawdown_auto_checkbox.configure(state="disabled")
         gain_label = format_brl(gain_threshold) if gain_threshold is not None else "desligado"
-        self._log(f"Iniciado: {target.title} | perda {format_brl(threshold)} | ganho {gain_label} | método "
+        drawdown_label = format_brl(drawdown_threshold) if drawdown_threshold is not None else "desligado"
+        self._log(f"Iniciado: {target.title} | perda {format_brl(threshold)} | ganho {gain_label} | "
+                  f"drawdown {drawdown_label} ({'alerta' if drawdown_alert else 'sem alerta'}) | método "
                   f"{'OCR para ação automática' if automatic else mode} | "
                   f"ação global {action_limits if automatic else 'desligada'}")
 
@@ -234,7 +323,8 @@ class ProfitAlertApp:
         popup.title(title)
         popup.attributes("-topmost", True)
         popup.resizable(False, False)
-        popup.configure(bg={"loss": "#822626", "gain": "#246b45"}.get(kind, "#6c511c"))
+        popup.configure(bg={"loss": "#822626", "gain": "#246b45",
+                            "drawdown": "#6c511c"}.get(kind, "#6c511c"))
         label = tk.Label(popup, text=title, font=("Segoe UI", 16, "bold"), fg="white", bg=popup["bg"])
         label.pack(padx=22, pady=(20, 7))
         tk.Label(popup, text=message, font=("Segoe UI", 12), fg="white", bg=popup["bg"], wraplength=460).pack(padx=22)
@@ -262,6 +352,13 @@ class ProfitAlertApp:
                     self.status_var.set(event.message)
                     self._log(event.message)
                     self._show_notice("LIMITE DE GANHO ATINGIDO", event.message + "\nConfira o Profit.", "gain")
+                elif event.kind == "drawdown_state":
+                    self.drawdown_state_var.set(event.message)
+                elif event.kind == "drawdown_alert":
+                    self.status_var.set(event.message)
+                    self._log(event.message)
+                    self._show_notice("LIMITE DE DRAWDOWN ATINGIDO", event.message +
+                                      "\nConfira o Profit.", "drawdown")
                 elif event.kind == "action":
                     self.action_var.set("Pausar + Zerar: " + event.message)
                     self._log(event.message)
@@ -279,6 +376,8 @@ class ProfitAlertApp:
                     self.stop_button.configure(state="disabled")
                     self.auto_checkbox.configure(state="normal")
                     self.gain_auto_checkbox.configure(state="normal")
+                    self.drawdown_alert_checkbox.configure(state="normal")
+                    self.drawdown_auto_checkbox.configure(state="normal")
                     self._log(event.message)
         except queue.Empty:
             pass

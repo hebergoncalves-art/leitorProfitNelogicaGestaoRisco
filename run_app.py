@@ -1,6 +1,5 @@
 """Entrada simples para empacotamento como executável Windows."""
 
-import os
 import ctypes
 import queue
 import sys
@@ -12,10 +11,6 @@ from pathlib import Path
 
 if __name__ == "__main__":
     try:
-        if getattr(sys, "frozen", False):
-            bundled = Path(sys._MEIPASS) / "tcl"
-            os.environ["TCL_LIBRARY"] = str(bundled / "tcl8.6")
-            os.environ["TK_LIBRARY"] = str(bundled / "tk8.6")
         if "--smoke-live" in sys.argv:
             from profit_alert.monitor import Monitor, MonitorConfig
             from profit_alert.windows import list_profit_windows

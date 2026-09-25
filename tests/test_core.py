@@ -1,8 +1,9 @@
 import unittest
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from profit_alert.core import (
-    ActionGate, AlertGate, format_brl, parse_gain_threshold, parse_result, parse_threshold,
+    ActionGate, AlertGate, DrawdownTracker, default_drawdown_cents, format_brl,
+    parse_drawdown_threshold, parse_gain_threshold, parse_result, parse_threshold,
 )
 
 
@@ -31,6 +32,15 @@ class MoneyParsingTests(unittest.TestCase):
         for invalid in ("0", "0,00", "-0,00", "-150", "-R$ 150,00", "abc", "1.2,00"):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 parse_gain_threshold(invalid)
+
+    def test_drawdown_threshold_and_default(self):
+        self.assertEqual(default_drawdown_cents(-15000), 45000)
+        self.assertIsNone(parse_drawdown_threshold("  "))
+        self.assertEqual(parse_drawdown_threshold("450"), 45000)
+        self.assertEqual(parse_drawdown_threshold("R$ 1.234,56"), 123456)
+        for invalid in ("0", "-1", "abc", "1.2,00"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                parse_drawdown_threshold(invalid)
 
 
 class AlertGateTests(unittest.TestCase):
@@ -100,6 +110,41 @@ class ActionGateTests(unittest.TestCase):
         self.assertFalse(gate.observe(15000, 102, 109))
         self.assertFalse(gate.observe(15000, 110, 110))
         self.assertTrue(gate.observe(15000, 111, 111))
+
+    def test_deferred_action_requires_exit_and_new_crossing(self):
+        gate = ActionGate(-15000)
+        gate.observe(-14900, 100, 100)
+        gate.observe(-15000, 101, 101)
+        self.assertTrue(gate.observe(-15100, 102, 102))
+        gate.defer_until_recross()
+        self.assertFalse(gate.observe(-15200, 103, 103))
+        self.assertFalse(gate.observe(-14900, 104, 104))
+        self.assertFalse(gate.observe(-15000, 105, 105))
+        self.assertTrue(gate.observe(-15100, 106, 106))
+
+
+class DrawdownTrackerTests(unittest.TestCase):
+    def test_positive_peak_drop_exact_limit_and_single_alert(self):
+        tracker = DrawdownTracker(40000)
+        today = date(2026, 9, 25)
+        self.assertEqual(tracker.observe(-10000, today), (None, None, False))
+        self.assertEqual(tracker.observe(80000, today), (80000, 0, False))
+        self.assertEqual(tracker.observe(40000, today), (80000, 40000, True))
+        self.assertEqual(tracker.observe(30000, today), (80000, 50000, False))
+        self.assertEqual(tracker.observe(90000, today), (90000, 0, False))
+        self.assertEqual(tracker.observe(40000, today), (90000, 50000, False))
+
+    def test_new_day_resets_peak_and_alert(self):
+        tracker = DrawdownTracker(40000)
+        first = date(2026, 9, 25)
+        tracker.observe(80000, first)
+        tracker.observe(30000, first)
+        self.assertEqual(tracker.observe(-10000, date(2026, 9, 26)),
+                         (None, None, False))
+        self.assertEqual(tracker.observe(50000, date(2026, 9, 26)),
+                         (50000, 0, False))
+        self.assertEqual(tracker.observe(10000, date(2026, 9, 26)),
+                         (50000, 40000, True))
 
 
 if __name__ == "__main__":

@@ -7,14 +7,19 @@ import os
 import tempfile
 from datetime import date, datetime
 from pathlib import Path
+from typing import Literal
 
 
 class ActionStore:
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Path | None = None,
+                 *, kind: Literal["standard", "drawdown"] = "standard") -> None:
+        if kind not in ("standard", "drawdown"):
+            raise ValueError("Tipo de acionamento inválido.")
         appdata = os.environ.get("LOCALAPPDATA")
         if path is None and not appdata:
             raise RuntimeError("LOCALAPPDATA indisponível; automação desativada.")
-        self.path = path or Path(appdata) / "LeitorProfit" / "action-state.json"
+        filename = "drawdown-action-state.json" if kind == "drawdown" else "action-state.json"
+        self.path = path or Path(appdata) / "LeitorProfit" / filename
 
     def reserve(self, day: date, pid: int) -> bool:
         if self.path.exists():

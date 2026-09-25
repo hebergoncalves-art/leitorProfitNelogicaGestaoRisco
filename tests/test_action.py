@@ -40,6 +40,19 @@ class ActionTests(unittest.TestCase):
             self.assertFalse(ActionStore(store.path).reserve(day, 20))
             self.assertTrue(store.reserve(date(2026, 9, 25), 20))
 
+    def test_drawdown_attempt_has_separate_daily_state(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(
+            "os.environ", {"LOCALAPPDATA": folder}
+        ):
+            standard = ActionStore()
+            drawdown = ActionStore(kind="drawdown")
+            day = date(2026, 9, 25)
+            self.assertNotEqual(standard.path, drawdown.path)
+            self.assertTrue(standard.reserve(day, 10))
+            self.assertTrue(drawdown.reserve(day, 10))
+            self.assertFalse(ActionStore(kind="drawdown").reserve(day, 20))
+            self.assertFalse(ActionStore().reserve(day, 20))
+
     def test_corrupt_state_fails_closed(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "state.json"
