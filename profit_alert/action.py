@@ -8,6 +8,7 @@ import threading
 import time
 import unicodedata
 from ctypes import wintypes
+from typing import Callable
 
 import cv2
 import numpy as np
@@ -169,16 +170,20 @@ def _dialog_text(engine: RapidOCR, frame: np.ndarray) -> str:
 
 class ProfitAction:
     def __init__(self, hwnd: int, pid: int, capture: WindowCapture,
-                 engine: RapidOCR, stop_event: threading.Event) -> None:
+                 engine: RapidOCR, stop_event: threading.Event,
+                 action_allowed: Callable[[], bool] | None = None) -> None:
         self.hwnd = hwnd
         self.pid = pid
         self.capture = capture
         self.engine = engine
         self.stop_event = stop_event
+        self.action_allowed = action_allowed
 
     def _check(self) -> None:
         if self.stop_event.is_set():
             raise ActionError("Monitoramento interrompido antes da confirmação.")
+        if self.action_allowed is not None and not self.action_allowed():
+            raise ActionError("Intervalo de suspensão iniciado; zeramento não confirmado.")
         if target_state(self.hwnd) is not None or window_process(self.hwnd)[0] != self.pid:
             raise ActionError("A janela selecionada do Profit mudou ou ficou indisponível.")
         if not window_title(self.hwnd).casefold().startswith(("profitpro", "profit pro")):

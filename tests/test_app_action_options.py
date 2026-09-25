@@ -64,6 +64,9 @@ class ActionOptionTests(unittest.TestCase):
         app.gain_auto_action_var = variable(gain_action)
         app.drawdown_alert_var = variable(False)
         app.drawdown_auto_action_var = variable(False)
+        app.suspension_enabled_var = variable(False)
+        app.suspension_rows = []
+        app.suspension_summary_var = variable("Nenhum intervalo configurado.")
         app.action_var = Mock()
         app.drawdown_state_var = Mock()
         app.status_var = Mock()
@@ -73,6 +76,8 @@ class ActionOptionTests(unittest.TestCase):
         app.gain_auto_checkbox = Mock()
         app.drawdown_alert_checkbox = Mock()
         app.drawdown_auto_checkbox = Mock()
+        app.suspension_checkbox = Mock()
+        app.suspension_button = Mock()
         app.events = queue.Queue()
         app._log = Mock()
         return app
@@ -119,12 +124,47 @@ class ActionOptionTests(unittest.TestCase):
         app.gain_auto_checkbox = Mock()
         app.drawdown_alert_checkbox = Mock()
         app.drawdown_auto_checkbox = Mock()
+        app.suspension_checkbox = Mock()
+        app.suspension_button = Mock()
         app._log = Mock()
         app._drain_events()
         app.auto_checkbox.configure.assert_called_once_with(state="normal")
         app.gain_auto_checkbox.configure.assert_called_once_with(state="normal")
         app.drawdown_alert_checkbox.configure.assert_called_once_with(state="normal")
         app.drawdown_auto_checkbox.configure.assert_called_once_with(state="normal")
+        app.suspension_checkbox.configure.assert_called_once_with(state="normal")
+        app.suspension_button.configure.assert_called_once_with(state="normal")
+
+    def test_suspension_intervals_can_be_added_edited_and_removed(self):
+        app = object.__new__(ProfitAlertApp)
+        app.suspension_rows = []
+        app.suspension_summary_var = Mock()
+        app._save_suspension_interval("10:00", "10:05")
+        app._save_suspension_interval("15:00", "15:15")
+        app._save_suspension_interval("10:01", "10:10", 0)
+        self.assertEqual(app.suspension_rows, [("10:01", "10:10"), ("15:00", "15:15")])
+        self.assertIn("10:01–10:10", app.suspension_summary_var.set.call_args.args[0])
+        app._remove_suspension_interval(1)
+        self.assertEqual(app.suspension_rows, [("10:01", "10:10")])
+
+    def test_start_requires_intervals_when_suspension_enabled_and_merges_them(self):
+        app = self.app_for_start("", True, False)
+        app.suspension_enabled_var = variable(True)
+        with patch("profit_alert.app.messagebox.showerror") as showerror, patch(
+            "profit_alert.app.Monitor"
+        ) as monitor:
+            app.start_monitor()
+        showerror.assert_called_once()
+        monitor.assert_not_called()
+
+        app.suspension_rows = [("10:00", "10:05"), ("10:04", "10:10"),
+                               ("15:00", "15:15")]
+        with patch("profit_alert.app.Monitor") as monitor:
+            app.start_monitor()
+        schedule = monitor.call_args.args[0].suspension
+        self.assertEqual(schedule.intervals, ((600, 610), (900, 915)))
+        app.suspension_checkbox.configure.assert_called_once_with(state="disabled")
+        app.suspension_button.configure.assert_called_once_with(state="disabled")
 
     def test_drawdown_default_tracks_loss_until_manual_edit(self):
         app = object.__new__(ProfitAlertApp)

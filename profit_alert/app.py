@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw
 from .core import (default_drawdown_cents, format_brl, parse_drawdown_threshold,
                    parse_gain_threshold, parse_threshold)
 from .monitor import Monitor, MonitorConfig, MonitorEvent
+from .suspension import (SuspensionSchedule, format_clock, parse_interval)
 from .windows import WindowTarget, list_profit_windows
 
 
@@ -86,6 +87,9 @@ class ProfitAlertApp:
         self.gain_auto_action_var = tk.BooleanVar(value=False)
         self.drawdown_alert_var = tk.BooleanVar(value=False)
         self.drawdown_auto_action_var = tk.BooleanVar(value=False)
+        self.suspension_enabled_var = tk.BooleanVar(value=False)
+        self.suspension_rows: list[tuple[str, str]] = []
+        self.suspension_summary_var = tk.StringVar(value="Nenhum intervalo configurado.")
         self.action_var = tk.StringVar(value="Pausar + Zerar: não acionado")
         self.drawdown_state_var = tk.StringVar(value="Drawdown: desativado")
         self.status_var = tk.StringVar(value="Parado")
@@ -169,6 +173,17 @@ class ProfitAlertApp:
         ttk.Label(frame, text="Ação em TODAS AS CONTAS. Perda e ganho compartilham uma tentativa diária; "
                   "drawdown tem uma própria.", wraplength=760).pack(anchor="w", pady=(0, 4))
 
+        suspension = ttk.Frame(frame)
+        suspension.pack(fill="x", pady=(7, 0))
+        self.suspension_checkbox = ttk.Checkbutton(
+            suspension, text="Suspender zeramento por perda e drawdown nos horários configurados",
+            variable=self.suspension_enabled_var)
+        self.suspension_checkbox.pack(side="left")
+        self.suspension_button = ttk.Button(
+            suspension, text="Configurar intervalos...", command=self._open_suspension_dialog)
+        self.suspension_button.pack(side="left", padx=8)
+        ttk.Label(frame, textvariable=self.suspension_summary_var, wraplength=760).pack(anchor="w")
+
         buttons = ttk.Frame(frame)
         buttons.pack(fill="x", pady=(12, 10))
         self.start_button = ttk.Button(buttons, text="Iniciar monitoramento", command=self.start_monitor)
@@ -186,9 +201,101 @@ class ProfitAlertApp:
         ttk.Label(status, textvariable=self.action_var, wraplength=680).pack(anchor="w", pady=(4, 0))
 
         ttk.Label(frame, text="Eventos desta sessão").pack(anchor="w")
-        self.log = scrolledtext.ScrolledText(frame, height=8, state="disabled", font=("Consolas", 9))
+        self.log = scrolledtext.ScrolledText(frame, height=5, state="disabled", font=("Consolas", 9))
         self.log.pack(fill="both", expand=True)
         self._log("Escolha a janela do Profit e inicie. Pode deixar Chrome ou VS Code por cima.")
+
+    def _refresh_suspension_summary(self) -> None:
+        if not self.suspension_rows:
+            self.suspension_summary_var.set("Nenhum intervalo configurado.")
+            return
+        intervals = [parse_interval(start, end) for start, end in self.suspension_rows]
+        schedule = SuspensionSchedule(datetime.now().date(), tuple(intervals))
+        labels = [f"{format_clock(start)}–{format_clock(end)}"
+                  for start, end in schedule.intervals]
+        self.suspension_summary_var.set("Intervalos: " + ", ".join(labels))
+
+    def _save_suspension_interval(self, start: str, end: str,
+                                  index: int | None = None) -> None:
+        first, last = parse_interval(start, end)
+        row = (format_clock(first), format_clock(last))
+        if index is None:
+            self.suspension_rows.append(row)
+        else:
+            self.suspension_rows[index] = row
+        self._refresh_suspension_summary()
+
+    def _remove_suspension_interval(self, index: int) -> None:
+        del self.suspension_rows[index]
+        self._refresh_suspension_summary()
+
+    def _open_suspension_dialog(self) -> None:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Intervalos de suspensão")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        body = ttk.Frame(dialog, padding=16)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="Horários locais do dia, no formato HH:MM. O fim libera o zeramento.",
+                  wraplength=460).pack(anchor="w", pady=(0, 8))
+        rows = tk.Listbox(body, height=6, width=45, exportselection=False)
+        rows.pack(fill="x")
+        fields = ttk.Frame(body)
+        fields.pack(fill="x", pady=10)
+        start_var = tk.StringVar()
+        end_var = tk.StringVar()
+        ttk.Label(fields, text="Início").pack(side="left")
+        ttk.Entry(fields, textvariable=start_var, width=7).pack(side="left", padx=(5, 14))
+        ttk.Label(fields, text="Fim").pack(side="left")
+        ttk.Entry(fields, textvariable=end_var, width=7).pack(side="left", padx=5)
+
+        def refresh() -> None:
+            rows.delete(0, "end")
+            for start, end in self.suspension_rows:
+                rows.insert("end", f"{start} – {end}")
+
+        def select(_event=None) -> None:
+            selected = rows.curselection()
+            if selected:
+                start, end = self.suspension_rows[selected[0]]
+                start_var.set(start)
+                end_var.set(end)
+
+        def save(edit: bool) -> None:
+            selected = rows.curselection()
+            if edit and not selected:
+                messagebox.showerror("Leitor Profit", "Selecione um intervalo para alterar.", parent=dialog)
+                return
+            try:
+                self._save_suspension_interval(start_var.get(), end_var.get(),
+                                               selected[0] if edit else None)
+            except ValueError as exc:
+                messagebox.showerror("Leitor Profit", str(exc), parent=dialog)
+                return
+            refresh()
+            start_var.set("")
+            end_var.set("")
+
+        def remove() -> None:
+            selected = rows.curselection()
+            if not selected:
+                messagebox.showerror("Leitor Profit", "Selecione um intervalo para remover.", parent=dialog)
+                return
+            self._remove_suspension_interval(selected[0])
+            refresh()
+            start_var.set("")
+            end_var.set("")
+
+        rows.bind("<<ListboxSelect>>", select)
+        refresh()
+        buttons = ttk.Frame(body)
+        buttons.pack(fill="x")
+        ttk.Button(buttons, text="Adicionar", command=lambda: save(False)).pack(side="left")
+        ttk.Button(buttons, text="Salvar alteração", command=lambda: save(True)).pack(side="left", padx=6)
+        ttk.Button(buttons, text="Remover", command=remove).pack(side="left")
+        ttk.Button(buttons, text="Fechar", command=dialog.destroy).pack(side="right")
+        dialog.wait_visibility()
+        dialog.grab_set()
 
     def _log(self, message: str) -> None:
         self.log.configure(state="normal")
@@ -269,6 +376,11 @@ class ProfitAlertApp:
             account = self.account_var.get().strip()
             if account and not account.isdecimal():
                 raise ValueError("Informe apenas os dígitos do número da conta.")
+            suspension = None
+            if self.suspension_enabled_var.get():
+                intervals = tuple(parse_interval(start, end)
+                                  for start, end in self.suspension_rows)
+                suspension = SuspensionSchedule(datetime.now().date(), intervals)
         except ValueError as exc:
             messagebox.showerror("Leitor Profit", str(exc))
             return
@@ -289,6 +401,7 @@ class ProfitAlertApp:
             gain_threshold_cents=gain_threshold, gain_auto_action=gain_action,
             drawdown_threshold_cents=drawdown_threshold,
             drawdown_alert=drawdown_alert, drawdown_auto_action=drawdown_action,
+            suspension=suspension,
         ), self.events)
         self.monitor.start()
         action_limits = " e ".join(name for name, enabled in (
@@ -305,12 +418,15 @@ class ProfitAlertApp:
         self.gain_auto_checkbox.configure(state="disabled")
         self.drawdown_alert_checkbox.configure(state="disabled")
         self.drawdown_auto_checkbox.configure(state="disabled")
+        self.suspension_checkbox.configure(state="disabled")
+        self.suspension_button.configure(state="disabled")
         gain_label = format_brl(gain_threshold) if gain_threshold is not None else "desligado"
         drawdown_label = format_brl(drawdown_threshold) if drawdown_threshold is not None else "desligado"
         self._log(f"Iniciado: {target.title} | perda {format_brl(threshold)} | ganho {gain_label} | "
                   f"drawdown {drawdown_label} ({'alerta' if drawdown_alert else 'sem alerta'}) | método "
                   f"{'OCR para ação automática' if automatic else mode} | "
-                  f"ação global {action_limits if automatic else 'desligada'}")
+                  f"ação global {action_limits if automatic else 'desligada'} | "
+                  f"suspensão {self.suspension_summary_var.get() if suspension else 'desligada'}")
 
     def stop_monitor(self) -> None:
         if self.monitor is not None:
@@ -378,6 +494,8 @@ class ProfitAlertApp:
                     self.gain_auto_checkbox.configure(state="normal")
                     self.drawdown_alert_checkbox.configure(state="normal")
                     self.drawdown_auto_checkbox.configure(state="normal")
+                    self.suspension_checkbox.configure(state="normal")
+                    self.suspension_button.configure(state="normal")
                     self._log(event.message)
         except queue.Empty:
             pass

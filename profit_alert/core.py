@@ -139,7 +139,7 @@ class ActionGate:
     observed_day: date | None = None
     suppressed_until_outside: bool = False
 
-    def observe(self, cents: int | None, captured_at: float, now: float) -> bool:
+    def _roll_day(self, now: float) -> None:
         day = date.fromtimestamp(now)
         if self.observed_day != day:
             self.observed_day = day
@@ -148,6 +148,23 @@ class ActionGate:
             self.last_frame_at = None
             self.attempted = False
             self.suppressed_until_outside = False
+
+    def observe_suspended(self, cents: int | None, captured_at: float, now: float) -> None:
+        """Mantém o cruzamento, mas descarta confirmações feitas na suspensão."""
+        self._roll_day(now)
+        self.first_at_limit = None
+        self.last_frame_at = None
+        self.attempted = False
+        if cents is None or captured_at > now + 1 or now - captured_at > 5:
+            return
+        outside_limit = (cents < self.threshold_cents if self.direction == "gain"
+                         else cents > self.threshold_cents)
+        if outside_limit:
+            self.suppressed_until_outside = False
+            self.armed = True
+
+    def observe(self, cents: int | None, captured_at: float, now: float) -> bool:
+        self._roll_day(now)
         if self.attempted:
             return False
         if cents is None or captured_at > now + 1 or now - captured_at > 5:

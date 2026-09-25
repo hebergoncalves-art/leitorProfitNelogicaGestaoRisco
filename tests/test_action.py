@@ -5,7 +5,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -115,3 +115,29 @@ class ActionTests(unittest.TestCase):
             with self.assertRaises(ActionError):
                 action.confirm_dialog(dialog)
             click.assert_not_called()
+
+    def test_suspension_beginning_during_dialog_prevents_final_confirmation(self):
+        allowed = Mock(side_effect=[True, False])
+        action = ProfitAction(1, 10, None, None, threading.Event(), action_allowed=allowed)
+        dialog = SimpleNamespace(NativeWindowHandle=2)
+        invoke = Mock()
+        yes = SimpleNamespace(Name="Sim", NativeWindowHandle=3, IsEnabled=True,
+                              GetPattern=Mock(return_value=invoke))
+        no = SimpleNamespace(Name="Não", NativeWindowHandle=4)
+        capture = SimpleNamespace(
+            start=Mock(),
+            read_frame=Mock(return_value=(np.zeros((158, 598, 4), dtype=np.uint8), time.time())),
+            stop=Mock(),
+        )
+        with patch("profit_alert.action.WindowCapture", return_value=capture), patch(
+            "profit_alert.action.window_process", return_value=(10, "profitchart.exe")
+        ), patch("profit_alert.action.window_title", return_value="ProfitPro"), patch(
+            "profit_alert.action.target_state", return_value=None
+        ), patch("profit_alert.action._dialog_text"), patch(
+            "profit_alert.action._walk", return_value=[yes, no]
+        ), patch("profit_alert.action._message_click") as click:
+            with self.assertRaisesRegex(ActionError, "suspensão iniciado"):
+                action.confirm_dialog(dialog)
+        self.assertEqual(allowed.call_count, 2)
+        invoke.Invoke.assert_not_called()
+        click.assert_not_called()

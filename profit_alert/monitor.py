@@ -15,6 +15,7 @@ from .action import ProfitAction
 from .action_store import ActionStore
 from .core import ActionGate, AlertGate, DrawdownTracker, format_brl
 from .readers import Reading, UIAReader, WindowCapture, read_image
+from .suspension import SuspensionSchedule
 from .windows import target_state
 
 
@@ -32,6 +33,7 @@ class MonitorConfig:
     drawdown_threshold_cents: int | None = None
     drawdown_alert: bool = False
     drawdown_auto_action: bool = False
+    suspension: SuspensionSchedule | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,7 @@ class Monitor:
         self.last_value: int | None = None
         self.last_report = 0.0
         self.warning_times: dict[str, float] = {}
+        self.suspension_announced = False
 
     def start(self) -> None:
         if self.thread is not None and self.thread.is_alive():
@@ -92,6 +95,9 @@ class Monitor:
         expected = self.config.expected_account.strip()
         return not expected or expected in reading.header_text
 
+    def _suspension_active(self, at: datetime | None = None) -> bool:
+        return self.config.suspension is not None and self.config.suspension.active(at or datetime.now())
+
     def _prepare_standard_action(self, reading: Reading, gate: ActionGate,
                                  limit_name: str) -> bool:
         today = datetime.now().date()
@@ -111,6 +117,12 @@ class Monitor:
 
     def _execute_action(self, limit_name: str, kind: str, frame, engine,
                         captured_at: float) -> None:
+        if limit_name != "ganho" and self._suspension_active():
+            gate = self.drawdown_action_gate if kind == "drawdown" else self.action_gate
+            if gate is not None:
+                gate.observe_suspended(None, captured_at, time.time())
+            self._emit("action", f"{limit_name}: suspenso pelo intervalo configurado.")
+            return
         today = datetime.now().date()
         if kind == "drawdown":
             self.drawdown_action_attempted_day = today
@@ -122,8 +134,9 @@ class Monitor:
                 self._emit("action", f"{limit_name}: não acionado; já houve uma tentativa automática hoje.")
                 return
             self._emit("action", f"{limit_name}: tentativa iniciada; Pausar + Zerar posições em todas as contas.")
+            allowed = (lambda: not self._suspension_active()) if limit_name != "ganho" else None
             ProfitAction(self.config.hwnd, self.config.pid, self.capture, engine,
-                         self.stop_event).execute(frame, captured_at)
+                         self.stop_event, action_allowed=allowed).execute(frame, captured_at)
             self._emit("action", f"{limit_name}: confirmação aceita; confira as posições no Profit.")
         except Exception as exc:
             self._emit("action_failed", f"Falha no zeramento automático por {limit_name}: {exc}")
@@ -160,17 +173,33 @@ class Monitor:
                            f"recuo {format_brl(drawdown_cents)}, "
                            f"resultado {format_brl(reading.cents)}.", reading)
         if frame is not None and engine is not None:
+            suspended = self._suspension_active(observed_at) or self._suspension_active(
+                datetime.fromtimestamp(reading.captured_at))
+            if self.config.auto_action or self.config.drawdown_auto_action:
+                if suspended and not self.suspension_announced:
+                    self._emit("action", "Suspensão ativa: zeramento por perda e drawdown bloqueado; "
+                               "alertas continuam ativos.")
+                elif not suspended and self.suspension_announced:
+                    self._emit("action", "Suspensão encerrada; gatilhos ainda no limite "
+                               "exigem duas novas capturas.")
+            self.suspension_announced = suspended
             candidates: list[tuple[str, str, ActionGate]] = []
             if self.config.auto_action:
-                if self._prepare_standard_action(reading, self.action_gate, "perda"):
+                if suspended:
+                    self.action_gate.observe_suspended(reading.cents, reading.captured_at, now)
+                elif self._prepare_standard_action(reading, self.action_gate, "perda"):
                     candidates.append(("perda", "standard", self.action_gate))
             if self.gain_action_gate is not None:
                 if self._prepare_standard_action(reading, self.gain_action_gate, "ganho"):
                     candidates.append(("ganho", "standard", self.gain_action_gate))
             if self.drawdown_action_gate is not None:
-                ready = self.drawdown_action_gate.observe(
-                    drawdown_cents, reading.captured_at, time.time()
-                )
+                if suspended:
+                    self.drawdown_action_gate.observe_suspended(
+                        drawdown_cents, reading.captured_at, now)
+                    ready = False
+                else:
+                    ready = self.drawdown_action_gate.observe(
+                        drawdown_cents, reading.captured_at, now)
                 if ready:
                     if self.drawdown_action_attempted_day == observed_at.date():
                         self._emit("action", "drawdown: não acionado; já houve uma tentativa automática hoje.")
