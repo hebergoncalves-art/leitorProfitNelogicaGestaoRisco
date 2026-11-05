@@ -1,6 +1,6 @@
 # Leitor Profit
 
-Última atualização: 2026-09-25.
+Última atualização: 2026-11-05.
 
 Aplicativo Windows que lê o campo monetário `Res. Dia` da janela de Automações do Profit Pro. A perda no limite ou abaixo, o ganho no limite ou acima e o recuo a partir do maior ganho observado (drawdown) podem emitir sons e avisos. O limite de ganho é opcional e começa vazio. O limite de drawdown começa em `450,00`, três vezes o valor absoluto da perda padrão de `-150,00`. As opções de **Pausar + Zerar posições** para perda, ganho e drawdown são independentes e começam desligadas; quando ligadas, acionam e confirmam o comando global do Profit, sem usar a DLL da Nelogica.
 
@@ -8,7 +8,7 @@ Para conhecer os recursos e seus limites, veja a [visão geral](docs/project-ove
 
 ## Iniciar
 
-Neste computador, dê dois cliques em [Iniciar-LeitorProfit.cmd](Iniciar-LeitorProfit.cmd). O inicializador tenta, nesta ordem, `dist/LeitorProfitV3`, `dist/LeitorProfitV2`, `dist/LeitorProfit` e o ambiente Python `.venv` preparado neste projeto. Se uma versão anterior estiver aberta, encerre-a pelo ícone na bandeja antes de iniciar a nova.
+Neste computador, dê dois cliques em [Iniciar-LeitorProfit.cmd](Iniciar-LeitorProfit.cmd). O inicializador tenta, nesta ordem, `dist/LeitorProfitV5`, `dist/LeitorProfitV3`, `dist/LeitorProfitV2`, `dist/LeitorProfit` e o ambiente Python `.venv` preparado neste projeto. Se uma versão anterior estiver aberta, encerre-a pelo ícone na bandeja antes de iniciar a nova.
 
 Na janela do aplicativo:
 
@@ -40,7 +40,7 @@ py -3.12 -m venv .venv
 .\Iniciar-LeitorProfit.cmd
 ```
 
-Se a pasta `dist/LeitorProfitV3` estiver presente, basta executá-la; ela contém a distribuição Windows preparada neste computador e dispensa Python instalado.
+Se a pasta `dist/LeitorProfitV5` estiver presente, basta executá-la; ela contém a distribuição Windows preparada neste computador e dispensa Python instalado.
 
 Para reconstruir o executável após editar o código:
 
@@ -49,7 +49,7 @@ Para reconstruir o executável após editar o código:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-Distribua a pasta **inteira** `dist/LeitorProfitV3`, não apenas o arquivo `.exe`.
+Distribua a pasta **inteira** `dist/LeitorProfitV5`, não apenas o arquivo `.exe`.
 
 Para executar a suíte de testes existente no ambiente Python preparado:
 
@@ -76,3 +76,5 @@ O script `diagnose_live.py` localiza a janela aberta, tenta a acessibilidade e f
 - Primeiro valide o comportamento com a conta de simulação. A captura fornecida e a janela aberta neste computador foram reconhecidas com OCR; não foi possível provocar uma mudança real de resultado para medir o tempo de alerta.
 - A confirmação aceita apenas prova que o diálogo foi fechado pelo Profit; confira no próprio Profit se todas as posições foram encerradas. Se a interface mudar, a validação do botão ou do texto impedirá o acionamento e emitirá um aviso de falha.
 - O acionamento dirigido foi validado com o Profit coberto por outra janela no mesmo desktop. Em outra área de trabalho virtual, a leitura e o alerta continuam, mas o clique automático fica bloqueado até a validação prática nessa condição.
+
+A confirmação identifica controles do tipo botão para evitar confusão com textos de mesmo nome. Se o Profit não expuser um par único Sim/Não pela acessibilidade, usa OCR da própria confirmação: exige o texto da operação global e o par de botões na mesma linha, com Sim à esquerda. Capturas antigas ou alterações de posição/escala bloqueiam esse clique. A correção vale para perda, ganho e drawdown.

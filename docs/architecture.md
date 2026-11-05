@@ -1,6 +1,6 @@
 # Arquitetura do Leitor Profit
 
-Última atualização: 2026-09-25.
+Última atualização: 2026-11-05.
 
 ## Componentes
 
@@ -32,4 +32,4 @@ As configurações da interface, os intervalos e o pico de drawdown vivem soment
 
 O aplicativo usa Tkinter e APIs Win32/COM para interface e identificação de janelas, `uiautomation` para leitura de acessibilidade, `windows-capture` para quadros da janela, `rapidocr`/`onnxruntime` para OCR e `pystray` para a bandeja. As versões das dependências instaláveis estão fixadas em [`requirements.txt`](../requirements.txt).
 
-`profit_alert/__main__.py` inicia a interface ou diagnostica uma imagem com `--image`; `run_app.py` é a entrada do executável e inclui modos de verificação. O [inicializador](../Iniciar-LeitorProfit.cmd) escolhe o pacote disponível antes do ambiente Python; [`build.ps1`](../build.ps1) gera `dist/LeitorProfitV3` com PyInstaller. Consulte o [README](../README.md) para os comandos de uso e instalação.
+`profit_alert/__main__.py` inicia a interface ou diagnostica uma imagem com `--image`; `run_app.py` é a entrada do executável e inclui modos de verificação. O [inicializador](../Iniciar-LeitorProfit.cmd) escolhe o pacote disponível antes do ambiente Python; [`build.ps1`](../build.ps1) gera `dist/LeitorProfitV5` com PyInstaller. Consulte o [README](../README.md) para os comandos de uso e instalação.
