@@ -1,5 +1,9 @@
 @echo off
 cd /d "%~dp0"
+if exist "dist\LeitorProfitV5\LeitorProfitV5.exe" (
+  start "" "dist\LeitorProfitV5\LeitorProfitV5.exe"
+  exit /b 0
+)
 if exist "dist\LeitorProfitV3\LeitorProfitV3.exe" (
   start "" "dist\LeitorProfitV3\LeitorProfitV3.exe"
   exit /b 0

@@ -168,6 +168,39 @@ def _dialog_text(engine: RapidOCR, frame: np.ndarray) -> str:
     raise ActionError("Texto da confirmação não corresponde à operação para todas as contas.")
 
 
+def locate_confirmation_yes(engine: RapidOCR, frame: np.ndarray) -> tuple[int, int]:
+    """Reconhece o par Sim/Não na própria captura, sem coordenadas fixas."""
+    height, width = frame.shape[:2]
+    for scale in (2, 3):
+        result = engine(cv2.resize(frame[:, :, :3], None, fx=scale, fy=scale,
+                                   interpolation=cv2.INTER_CUBIC))
+        if result.boxes is None:
+            continue
+        labels = list(zip(result.boxes, result.txts, result.scores))
+        text = " ".join(str(label) for _, label, score in labels if float(score) >= 0.85)
+        if not valid_confirmation(text):
+            continue
+        matches = {"sim": [], "nao": []}
+        for box, label, score in labels:
+            name = normalize(str(label))
+            if name not in matches or float(score) < 0.93:
+                continue
+            points = np.asarray(box, dtype=float) / scale
+            left, top = points.min(axis=0)
+            right, bottom = points.max(axis=0)
+            if not (0 <= left < right < width and height * 0.6 <= top < bottom < height):
+                continue
+            matches[name].append((left, top, right, bottom))
+        if len(matches["sim"]) != 1 or len(matches["nao"]) != 1:
+            continue
+        yes, no = matches["sim"][0], matches["nao"][0]
+        # O par precisa estar na mesma linha, com Sim à esquerda de Não.
+        if yes[2] >= no[0] or max(yes[1], no[1]) >= min(yes[3], no[3]):
+            continue
+        return round((yes[0] + yes[2]) / 2), round((yes[1] + yes[3]) / 2)
+    raise ActionError("Botões Sim/Não não reconhecidos com segurança na captura da confirmação.")
+
+
 class ProfitAction:
     def __init__(self, hwnd: int, pid: int, capture: WindowCapture,
                  engine: RapidOCR, stop_event: threading.Event,
@@ -231,6 +264,7 @@ class ProfitAction:
         dialog_hwnd = int(dialog.NativeWindowHandle)
         if not dialog_hwnd or window_process(dialog_hwnd)[0] != self.pid:
             raise ActionError("Caixa de confirmação não pertence ao Profit selecionado.")
+        capture_bounds = _rect(dialog_hwnd)
         dialog_capture = WindowCapture(dialog_hwnd, full_frame=True)
         dialog_capture.start()
         try:
@@ -252,30 +286,47 @@ class ProfitAction:
             dialog_capture.stop()
 
         buttons = [item for item in _walk(dialog, 3)
-                   if normalize(str(item.Name or "")) in ("sim", "nao")]
+                   if item.ControlTypeName == "ButtonControl"
+                   and normalize(str(item.Name or "")) in ("sim", "nao")]
         yes = [item for item in buttons if normalize(str(item.Name or "")) == "sim"]
         no = [item for item in buttons if normalize(str(item.Name or "")) == "nao"]
-        if len(yes) != 1 or len(no) != 1:
-            raise ActionError("Botões Sim/Não da confirmação estão ambíguos.")
-        yes_control = yes[0]
-        yes_hwnd = int(yes_control.NativeWindowHandle)
-        if not yes_control.IsEnabled or not yes_hwnd or window_process(yes_hwnd)[0] != self.pid:
-            raise ActionError("Controle Sim inválido ou desabilitado.")
-        invoke = yes_control.GetPattern(auto.PatternId.InvokePattern)
-        self._check()
-        if invoke is not None:
-            invoke.Invoke()
+        if len(yes) == 1 and len(no) == 1:
+            yes_control = yes[0]
+            yes_hwnd = int(yes_control.NativeWindowHandle)
+            if not yes_control.IsEnabled or (yes_hwnd and window_process(yes_hwnd)[0] != self.pid):
+                raise ActionError("Controle Sim inválido ou desabilitado.")
+            invoke = yes_control.GetPattern(auto.PatternId.InvokePattern)
+            self._check()
+            if invoke is not None:
+                invoke.Invoke()
+            else:
+                rectangle = yes_control.BoundingRectangle
+                self._click_confirmation(dialog_hwnd, rectangle.xcenter(), rectangle.ycenter())
         else:
-            rectangle = yes_control.BoundingRectangle
-            try:
-                _message_click(yes_hwnd, rectangle.xcenter(), rectangle.ycenter(), self.pid)
-            except ActionError:
-                # A janela modal pode fechar antes do retorno da mensagem.
-                if _dialog(self.hwnd, self.pid) is not None:
-                    raise
+            x, y = locate_confirmation_yes(self.engine, item[0])
+            bounds = _rect(dialog_hwnd)
+            if (time.time() - item[1] > 5
+                    or tuple(getattr(bounds, k) for k in ("left", "top", "right", "bottom"))
+                    != tuple(getattr(capture_bounds, k) for k in ("left", "top", "right", "bottom"))
+                    or abs(item[0].shape[1] - (bounds.right - bounds.left)) > 10
+                    or abs(item[0].shape[0] - (bounds.bottom - bounds.top)) > 10):
+                raise ActionError("Captura da confirmação antiga ou posição/escala alterada.")
+            self._check()
+            current = _dialog(self.hwnd, self.pid)
+            if current is None or int(current.NativeWindowHandle) != dialog_hwnd:
+                raise ActionError("A caixa de confirmação mudou antes do clique.")
+            self._click_confirmation(dialog_hwnd, bounds.left + x, bounds.top + y)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             if _dialog(self.hwnd, self.pid) is None:
                 return
             self.stop_event.wait(0.15)
         raise ActionError("A confirmação permaneceu aberta; confira o Profit.")
+
+    def _click_confirmation(self, hwnd: int, x: int, y: int) -> None:
+        try:
+            _message_click(hwnd, x, y, self.pid)
+        except ActionError:
+            # A janela modal pode fechar antes do retorno da mensagem.
+            if _dialog(self.hwnd, self.pid) is not None:
+                raise
